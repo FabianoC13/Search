@@ -33,6 +33,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- A local text file WebKit has no name for, a Makefile, a .swift, a .log or a .yml, opens as text in the tab instead of being copied to Downloads. A file that isn't text is downloaded as before ([#525](https://github.com/driceroland/Search/issues/525))
 - Bringing things over says when macOS hasn't let Search read a browser's data, and where to allow it, instead of saying nothing of that browser was found. Chrome, the one most people come from, is the one macOS most often keeps back ([#583](https://github.com/driceroland/Search/issues/583))
 - A website whose name starts with 10. or 192.168., like 10.io, opens over https. Only an address written as one, four numbers and nothing more, is taken for a machine on your network and opened over http ([#590](https://github.com/driceroland/Search/issues/590))
 - Closing the last tab that isn't a pin leaves an empty tab, as closing the only tab does, instead of waking one of your pins ([#537](https://github.com/driceroland/Search/issues/537))
