@@ -2758,7 +2758,7 @@ final class Browser: NSObject, ObservableObject {
         tabs.remove(at: index)
         removeEmptyGroup(tab.groupID)
         if activeID == tab.id {
-            if partner == nil, !tab.isBlank, tabs.allSatisfy({ $0.pin != nil || $0.bench }) {
+            if partner == nil, !tab.isBlank, tabs.allSatisfy({ $0.pin != nil }) {
                 // The last tab that wasn't a pin: an empty tab takes its
                 // place, as when it was the only tab, rather than a pin you
                 // never asked for being woken (#537).
@@ -4483,7 +4483,29 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
             decisionHandler(.download)
             return
         }
+        // A file already on this Mac that reads as text, a Makefile or a
+        // .swift, is shown as text, as in Safari and Chrome. WebKit calls
+        // many of them application/octet-stream, and downloading one only
+        // made a copy of it in Downloads (#525).
+        if !response.canShowMIMEType, response.isForMainFrame,
+           let url = response.response.url, url.isFileURL,
+           let text = Self.localText(at: url) {
+            decisionHandler(.cancel)
+            webView.load(text, mimeType: "text/plain", characterEncodingName: "utf-8", baseURL: url)
+            return
+        }
         decisionHandler(response.canShowMIMEType ? .allow : .download)
+    }
+
+    /// A local file's bytes, when they read as UTF-8 text: no NUL in them,
+    /// which no text file has and nearly every binary does. Too large to be
+    /// worth reading as a page, it is downloaded as before.
+    private static func localText(at url: URL) -> Data? {
+        guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= 8_000_000,
+              let data = try? Data(contentsOf: url),
+              !data.contains(0), String(data: data, encoding: .utf8) != nil
+        else { return nil }
+        return data
     }
 
     func webView(
