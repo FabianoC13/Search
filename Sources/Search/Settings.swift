@@ -309,6 +309,10 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.commandBar)
             }
             Rule()
+            Line("New tab in a floating field", "⌘T raises the address field over the page you're on, as in Arc. Return opens what you typed in a new tab; Escape, ⌘W or a click outside puts it away and leaves the page as it was") {
+                Switch(on: $prefs.floatingNewTab)
+            }
+            Rule()
             Line("Show where links go", "Point at a link and its address shows at the bottom of the page") {
                 Switch(on: $prefs.showsLinks)
             }

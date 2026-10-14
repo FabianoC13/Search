@@ -128,7 +128,7 @@ struct TabBar: View {
                     // The way to a new page, right after the tabs rather than
                     // at the end of their run, so it is there however far the
                     // run has scrolled. Out of sight until the pointer is up here.
-                    Button { browser.newTab() } label: {
+                    Button { browser.launch() } label: {
                         Image(systemName: "plus")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(Palette.muted)

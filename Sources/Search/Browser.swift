@@ -292,8 +292,16 @@ final class Browser: NSObject, ObservableObject {
     /// without being asked — there is nothing else for that tab to show.
     @Published var editing = false {
         // The field put away takes its chip with it.
-        didSet { if !editing, siteChip != nil { siteChip = nil } }
+        didSet {
+            if !editing, siteChip != nil { siteChip = nil }
+            if !editing, launching { launching = false }
+        }
     }
+    /// True while the field is up over a page for a tab that doesn't exist
+    /// yet (Settings › General › New tab in a floating field): Return opens
+    /// what was typed in a new tab, and putting the field away leaves the
+    /// page you were on as it was.
+    @Published private(set) var launching = false
     /// The site the list offers to search, for what has been typed so far
     /// (Settings › General › Search a site from the address field).
     @Published private(set) var siteOffer: SearchSite?
@@ -2537,6 +2545,31 @@ final class Browser: NSObject, ObservableObject {
         rememberSession()
     }
 
+    /// ⌘T, the + button and the menu. With the floating field turned on and
+    /// a page in front, the field comes up over that page instead of a blank
+    /// tab: the tab is made by Return, not by asking for one. Anywhere else
+    /// — a blank tab already in front, or an extension's new tab page you
+    /// chose — it is an ordinary new tab.
+    func launch() {
+        guard prefs.floatingNewTab, let tab = active, !tab.isBlank, peekTab == nil else {
+            newTab()
+            return
+        }
+        if #available(macOS 15.4, *), Extensions.shared.newTabPage != nil {
+            newTab()
+            return
+        }
+        // Again while it is up: it stays, with what was typed cleared.
+        reviewing = false
+        cancelTabEdit()
+        summoning = false
+        siteChip = nil
+        typed = ""
+        editing = true
+        launching = true
+        focusRequest += 1
+    }
+
     func newTab() {
         // On a private tab, a new one is private too: ⌘T from a page that
         // keeps nothing and landing on one that keeps everything is how a
@@ -2647,6 +2680,9 @@ final class Browser: NSObject, ObservableObject {
     /// instead took the one thing you couldn't see. Escape puts things away
     /// in the same order, so the two keys agree on what is in front.
     func closeFront() {
+        // The floating new tab is the thing in front: ⌘W takes it away and
+        // leaves the page under it.
+        if launching { dismiss(); return }
         if peekTab != nil { closePeek() }
         else if closePanel() { return }
         else if let tab = active { close(tab) }
@@ -3856,6 +3892,7 @@ final class Browser: NSObject, ObservableObject {
     func summon() {
         reviewing = false
         cancelTabEdit()
+        launching = false
         summoning = true
         typed = ""
         editing = true
@@ -3962,6 +3999,8 @@ final class Browser: NSObject, ObservableObject {
             command.run(on: self)
         } else if let id = offer.tab, let tab = tabs.first(where: { $0.id == id }) {
             select(tab)
+        } else if launching {
+            open(offer.url, foreground: true, from: active)
         } else {
             (active ?? tabs.first)?.go(to: offer.url)
         }
@@ -4009,6 +4048,7 @@ final class Browser: NSObject, ObservableObject {
     /// and Escape puts it back.
     func edit() {
         summoning = false
+        launching = false
         // Never a name and password written into the address: they would be
         // on screen, and in whatever you copy from here.
         typed = active?.address.map { url -> String in
@@ -4025,6 +4065,14 @@ final class Browser: NSObject, ObservableObject {
     func dismiss() {
         summoning = false
         cycling = false
+        // The floating new tab was never a tab: nothing is left behind.
+        if launching {
+            launching = false
+            siteChip = nil
+            editing = false
+            typed = ""
+            return
+        }
         // Esc with a site in the field: the site goes, the field stays.
         if siteChip != nil {
             siteChip = nil
@@ -4105,7 +4153,11 @@ final class Browser: NSObject, ObservableObject {
             refusals += 1
             return
         }
-        if aside {
+        if launching, !aside {
+            // The floating new tab: what was typed gets a tab of its own, and
+            // the page the field was raised over stays as it was.
+            open(url, foreground: true, from: active)
+        } else if aside {
             // Opened behind the page by hand, as a ⌘-clicked link is: it may
             // wait to load (Settings › Tabs › Load background tabs…).
             open(url, foreground: front, from: active, mayWait: true)

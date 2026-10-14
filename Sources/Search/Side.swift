@@ -512,7 +512,7 @@ struct SideBar: View {
     private static let footHeight: CGFloat = 26 + 10
 
     private var newTab: some View {
-        Quiet(icon: "plus", title: "New tab", height: SideBar.row) { browser.newTab() }
+        Quiet(icon: "plus", title: "New tab", height: SideBar.row) { browser.launch() }
             .padding(.top, SideBar.gap)
     }
 
