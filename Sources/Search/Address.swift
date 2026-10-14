@@ -41,18 +41,21 @@ enum Address {
             || host.hasSuffix(".local")
             || host == "127.0.0.1"
             || host == "0.0.0.0"
-            || host.hasPrefix("192.168.")
-            || host.hasPrefix("10.")
             || privateRange(host)
         return URL(string: (local ? "http://" : "https://") + text)
     }
 
-    /// 172.16.0.0 to 172.31.255.255, the third private range, where Docker
-    /// and many offices put their machines.
+    /// The private ranges, 10/8, 172.16/12 and 192.168/16, where home
+    /// routers, Docker and offices put their machines. Only an address
+    /// written as one, four numbers and nothing more: 10.io and
+    /// 192.168.1.1.example.com are websites like any other.
     private static func privateRange(_ host: String) -> Bool {
-        let parts = host.split(separator: ".")
-        guard parts.count == 4, parts[0] == "172", let second = Int(parts[1]) else { return false }
-        return (16...31).contains(second)
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false).map { UInt8($0) }
+        guard parts.count == 4, let first = parts[0], let second = parts[1],
+              parts.allSatisfy({ $0 != nil }) else { return false }
+        return first == 10
+            || (first == 172 && (16...31).contains(second))
+            || (first == 192 && second == 168)
     }
 
     /// Dev servers say they are listening on 0.0.0.0 — every address this
