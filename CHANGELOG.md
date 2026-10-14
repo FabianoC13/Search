@@ -33,6 +33,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- Bringing things over says when macOS hasn't let Search read a browser's data, and where to allow it, instead of saying nothing of that browser was found. Chrome, the one most people come from, is the one macOS most often keeps back ([#583](https://github.com/driceroland/Search/issues/583))
 - A website whose name starts with 10. or 192.168., like 10.io, opens over https. Only an address written as one, four numbers and nothing more, is taken for a machine on your network and opened over http ([#590](https://github.com/driceroland/Search/issues/590))
 - Closing the last tab that isn't a pin leaves an empty tab, as closing the only tab does, instead of waking one of your pins ([#537](https://github.com/driceroland/Search/issues/537))
 - A website an extension lists in its manifest can send it messages, as in Chrome: claude.ai, for one, hands Claude in Chrome its sign-in that way, and approving it ended in "Authorization failed". Only the sites an extension names get to, by Chrome's own rules, and Google's sites are left out. A page already open when Search starts needs a reload first. Thanks [@cunyiles](https://github.com/cunyiles) for tracking it down ([#496](https://github.com/driceroland/Search/issues/496))
