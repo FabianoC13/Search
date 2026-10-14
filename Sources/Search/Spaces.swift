@@ -341,6 +341,7 @@ extension Browser {
 /// went — out on one side, the next one in from the other.
 struct SpaceDot: View {
     @ObservedObject var browser: Browser
+    @Environment(\.glass) private var glass
     @State private var hovering = false
     /// What is drawn, a step behind the browser: the space changes in a
     /// frame with nothing animated (see SpaceSwipe.slide), and the icon
@@ -372,7 +373,7 @@ struct SpaceDot: View {
             .clipped()
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(hovering ? Palette.hover : .clear)
+                    .fill(hovering ? (glass ? Glass.hover : Palette.hover) : .clear)
             )
             .contentShape(Rectangle())
         }

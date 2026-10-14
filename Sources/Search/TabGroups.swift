@@ -17,6 +17,7 @@ struct GroupHeading: View {
     let group: TabGroup
     var horizontal = false
     var dragSpace: String? = nil
+    @Environment(\.glass) private var glass
 
     @State private var draft = ""
     @State private var hovering = false
@@ -63,7 +64,7 @@ struct GroupHeading: View {
         .frame(maxWidth: horizontal ? nil : .infinity, alignment: .leading)
         .fixedSize(horizontal: horizontal, vertical: false)
         .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .fill(dropping ? Palette.sideWash : (hovering ? Palette.sideHover : .clear)))
+            .fill(dropping ? (glass ? Glass.wash : Palette.sideWash) : (hovering ? (glass ? Glass.hover : Palette.sideHover) : .clear)))
         .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         .onTapGesture { if !editing { browser.toggleTabGroup(group.id) } }
         .background {

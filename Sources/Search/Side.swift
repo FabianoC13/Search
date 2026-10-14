@@ -14,6 +14,7 @@ struct SideBar: View {
     var onFrame = false
 
     @Namespace private var pill
+    @Environment(\.glass) private var glass
 
     @State private var landing = false
     /// The width the column had when the edge was picked up.
@@ -96,14 +97,19 @@ struct SideBar: View {
         .onAppear { SpaceSwipe.shared.start(for: browser) }
         .background {
             ZStack {
-                landing ? Palette.sideHover : onFrame ? Palette.frame : Palette.ground
+                if prefs.sideGlass {
+                    GlassGround()
+                    if landing { Glass.hover }
+                } else {
+                    landing ? Palette.sideHover : onFrame ? Palette.frame : Palette.ground
+                }
                 if prefs.splitView {
                     SplitDropZone(browser: browser, tab: nil, kind: .strip)
                 }
             }
         }
         .overlay(alignment: innerEdge) {
-            if !onFrame { Rectangle().fill(Palette.hairline).frame(width: 1) }
+            if !onFrame { Rectangle().fill(prefs.sideGlass ? Glass.hairline : Palette.hairline).frame(width: 1) }
         }
         .overlay(alignment: innerEdge) { edge }
         .onDrop(of: [.url, .text], isTargeted: $landing) { providers in
@@ -117,6 +123,7 @@ struct SideBar: View {
         // The last square made the first row changes nothing in the row's
         // order; only how many of each there are.
         .animation(Motion.settle, value: browser.listedPins.count)
+        .environment(\.glass, prefs.sideGlass)
     }
 
     /// The column's edge: pull it to make the column wider or narrower,
@@ -597,6 +604,7 @@ private struct PinSquare: View {
     var width: CGFloat = 34
     var height: CGFloat = 34
 
+    @Environment(\.glass) private var glass
     @State private var hovering = false
 
     /// Everything drawn inside scales off the shorter edge — the one that
@@ -627,11 +635,12 @@ private struct PinSquare: View {
                 // row is darker than the white it sits on (Drice: the live
                 // pin barely showed among the others).
                 RoundedRectangle(cornerRadius: scale * 9 / 34, style: .continuous)
-                    .fill(Palette.sidePinLive)
+                    .fill(glass ? Glass.pinLive : Palette.sidePinLive)
                     .matchedGeometryEffect(id: "live", in: pill)
             } else {
                 RoundedRectangle(cornerRadius: scale * 9 / 34, style: .continuous)
-                    .fill(hovering ? Palette.sideHover : Palette.sideTile)
+                    .fill(glass ? (hovering ? Glass.hover : Glass.tile)
+                                : (hovering ? Palette.sideHover : Palette.sideTile))
             }
         }
         .contentShape(RoundedRectangle(cornerRadius: scale * 9 / 34, style: .continuous))
@@ -658,6 +667,7 @@ private struct SideRow: View {
     let close: () -> Void
     var interactive = true
 
+    @Environment(\.glass) private var glass
     @State private var hovering = false
     @State private var shake: CGFloat = 0
 
@@ -795,7 +805,7 @@ private struct SideRow: View {
     private var ground: some View {
         if live {
             ZStack(alignment: .leading) {
-                Rectangle().fill(Palette.sideWash)
+                Rectangle().fill(glass ? Glass.wash : Palette.sideWash)
                 if prefs.showsReading {
                     GeometryReader { geo in
                         ReadingFill(meter: tab.meter, width: geo.size.width)
@@ -806,7 +816,7 @@ private struct SideRow: View {
             .matchedGeometryEffect(id: "live", in: pill)
         } else if hovering {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(Palette.sideHover)
+                .fill(glass ? Glass.hover : Palette.sideHover)
         }
     }
 
@@ -823,6 +833,7 @@ struct Quiet: View {
     var height: CGFloat = 28
     let act: () -> Void
 
+    @Environment(\.glass) private var glass
     @State private var hovering = false
 
     var body: some View {
@@ -841,7 +852,7 @@ struct Quiet: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(hovering ? Palette.sideHover : .clear)
+                    .fill(hovering ? (glass ? Glass.hover : Palette.sideHover) : .clear)
             )
             .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
@@ -860,12 +871,13 @@ struct KeepLine: View {
     let clears: Bool
     let act: () -> Void
 
+    @Environment(\.glass) private var glass
     @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 6) {
             Rectangle()
-                .fill(Palette.hairline)
+                .fill(glass ? Glass.hairline : Palette.hairline)
                 .frame(height: 1)
             if clears && hovering {
                 Button(action: act) {
@@ -923,6 +935,7 @@ struct Door: View {
     var help = ""
     let act: () -> Void
 
+    @Environment(\.glass) private var glass
     @State private var hovering = false
 
     var body: some View {
@@ -933,7 +946,7 @@ struct Door: View {
                 .frame(width: 26, height: 26)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(on ? Palette.sideWash : (hovering ? Palette.sideHover : .clear))
+                        .fill(on ? (glass ? Glass.wash : Palette.sideWash) : (hovering ? (glass ? Glass.hover : Palette.sideHover) : .clear))
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
