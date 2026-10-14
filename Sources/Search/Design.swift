@@ -58,6 +58,70 @@ enum Palette {
     }
 }
 
+/// The sidebar with the desktop showing through it (Settings › Tabs), the
+/// way MonoCode's file list lets the wallpaper's colours through a dark,
+/// blurred tint. Over glass an opaque grey would sit on it like a sticker,
+/// so the greys a row wears there are the ink at a strength instead, and
+/// darken or lighten whatever the wallpaper puts under them by the same
+/// step the opaque ones take from the white or the near-black.
+enum Glass {
+    static let wash = Color(nsColor: veil(0.07, 0.09))
+    static let pinLive = Color(nsColor: veil(0.11, 0.13))
+    static let hover = Color(nsColor: veil(0.04, 0.05))
+    static let hairline = Color(nsColor: veil(0.09, 0.08))
+    /// Laid over the blur: how much of the ground colour stays. Enough, in
+    /// a dark window, that a bright wallpaper comes through at about a
+    /// third of its brightness, with its colours still in it.
+    static let tint: Double = 0.28
+
+    private static func veil(_ light: CGFloat, _ dark: CGFloat) -> NSColor {
+        NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                ? NSColor(white: 1, alpha: dark)
+                : NSColor(white: 0, alpha: light)
+        }
+    }
+}
+
+/// The desktop behind the window, blurred, under a veil of the ground colour.
+/// The material follows the window's appearance, as the ground does.
+struct GlassGround: View {
+    var body: some View {
+        ZStack {
+            Backdrop()
+            Palette.ground.opacity(Glass.tint)
+        }
+    }
+
+    private struct Backdrop: NSViewRepresentable {
+        func makeNSView(context: Context) -> NSVisualEffectView {
+            let view = NSVisualEffectView()
+            view.material = .sidebar
+            view.blendingMode = .behindWindow
+            // Glass whether or not the window is in front: a sidebar that
+            // turned to flat grey every time another app was clicked would
+            // be a sidebar flickering between two designs.
+            view.state = .active
+            return view
+        }
+
+        func updateNSView(_ view: NSVisualEffectView, context: Context) {}
+    }
+}
+
+private struct GlassKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// Inside the see-through sidebar: rows and doors there wear `Glass`'s
+    /// greys rather than `Palette`'s.
+    var glass: Bool {
+        get { self[GlassKey.self] }
+        set { self[GlassKey.self] = newValue }
+    }
+}
+
 /// Light, dark, or the Mac's own — the one choice that colours everything.
 enum Look: String, CaseIterable, Identifiable {
     case light, dark, system

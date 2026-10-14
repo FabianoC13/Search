@@ -415,6 +415,10 @@ struct SettingsPanel: View {
                 Line("Hide the sidebar until the pointer reaches the edge", "The page takes the whole window; push against its \(prefs.sidePosition.rawValue) edge for the tabs. ⌘S keeps them out.") {
                     Switch(on: $prefs.sideHides)
                 }
+                Rule()
+                Line("See the desktop through the sidebar", "Your wallpaper's colours come through it, blurred and darkened") {
+                    Switch(on: $prefs.sideGlass)
+                }
             }
             Rule()
             Line("Tabs show", "Beside the title, and on a pinned square") {
