@@ -79,6 +79,11 @@ final class Preferences: ObservableObject {
     @Published var sideHides: Bool {
         didSet { store.set(sideHides, forKey: "sidebar.hides") }
     }
+    /// The desktop showing through the sidebar, blurred and darkened (see
+    /// `Glass`). Off unless asked for.
+    @Published var sideGlass: Bool {
+        didSet { store.set(sideGlass, forKey: "sidebar.glass") }
+    }
     /// How wide the column is. Pulled by its edge, and remembered.
     @Published var sideWidth: CGFloat {
         didSet { store.set(Double(sideWidth), forKey: "sidebar.width") }
@@ -379,6 +384,7 @@ final class Preferences: ObservableObject {
             ?? (store.string(forKey: "manner") == "side")
         sidePosition = store.string(forKey: "sidebar.position").flatMap(SidebarPosition.init) ?? .left
         sideHides = store.bool(forKey: "sidebar.hides")
+        sideGlass = store.bool(forKey: "sidebar.glass")
         let width = store.object(forKey: "sidebar.width") as? Double ?? Double(Metrics.side)
         sideWidth = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(width)))
         glyph = store.string(forKey: "glyph").flatMap(Glyph.init) ?? .letters
