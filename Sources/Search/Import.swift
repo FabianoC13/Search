@@ -45,6 +45,20 @@ enum Chromium {
             }
         }
 
+        /// Whether macOS refused to let Search look in the browser's folder,
+        /// as it does for another app's data until it is allowed. Read as
+        /// an empty list, a refusal would say there was nothing there.
+        var refused: Bool {
+            do {
+                _ = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+                return false
+            } catch let error as NSError {
+                if error.domain == NSCocoaErrorDomain, error.code == NSFileReadNoPermissionError { return true }
+                let posix = (error.userInfo[NSUnderlyingErrorKey] as? NSError) ?? error
+                return posix.domain == NSPOSIXErrorDomain && [Int(EPERM), Int(EACCES)].contains(posix.code)
+            }
+        }
+
         /// The profiles to read: the one whose folder is named, or every
         /// one when nil, which is "All profiles".
         func profiles(only: String?) -> [URL] {
@@ -120,10 +134,16 @@ enum Chromium {
     /// Browsers that are on this Mac with nothing found where their data
     /// should be — said by name, with where Search looked, rather than
     /// "no other browser found".
-    static func unreadable() -> [(source: Source, looked: String)] {
+    static func unreadable() -> [(source: Source, looked: String, said: String)] {
         guard !Store.testing else { return [] }
-        return known.filter { $0.appInstalled && $0.profiles.isEmpty }.map {
-            ($0, $0.root.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+        return known.filter { $0.appInstalled && $0.profiles.isEmpty }.map { source in
+            let looked = source.root.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+            // Not allowed to look is not the same as nothing there: the one
+            // sends you to the setting, the other to another browser (#583).
+            let said = source.refused
+                ? "\(source.name) is on this Mac, but macOS hasn't let Search read \(looked). Allow Search in System Settings › Privacy & Security › Full Disk Access, then look again."
+                : "\(source.name) is on this Mac, but nothing of it was found in \(looked)."
+            return (source, looked, said)
         }
     }
 

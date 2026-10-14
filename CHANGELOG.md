@@ -33,6 +33,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- Bringing things over says when macOS hasn't let Search read a browser's data, and where to allow it, instead of saying nothing of that browser was found. Chrome, the one most people come from, is the one macOS most often keeps back ([#583](https://github.com/driceroland/Search/issues/583))
 - A website whose name starts with 10. or 192.168., like 10.io, opens over https. Only an address written as one, four numbers and nothing more, is taken for a machine on your network and opened over http ([#590](https://github.com/driceroland/Search/issues/590))
 - Closing the last tab that isn't a pin leaves an empty tab, as closing the only tab does, instead of waking one of your pins ([#537](https://github.com/driceroland/Search/issues/537))
 - AdBlock blocks ads again. Its background asked WebKit to watch every kind of request Chrome names, two of which ("webtransport" and "webbundle") WebKit doesn't know, and WebKit refused the listener and stopped the background there: the few network rules built into its lists still applied, but nothing else did, so ads hidden by the page's own layout stayed and its button had nothing behind it. Those two are now left out of the list and the rest is watched as asked
