@@ -105,27 +105,108 @@ enum Glass {
 
 /// The desktop behind the window, blurred, under a veil of the ground colour.
 /// The material follows the window's appearance, as the ground does.
+///
+/// In full screen there is no desktop behind the window, only the black of
+/// the space macOS gives it, and the glass showed that: a black column. So
+/// there the wallpaper is laid in by hand, where it would be on the screen,
+/// and the same material blurs it from inside the window instead.
 struct GlassGround: View {
+    var fullScreen = false
+
     var body: some View {
         ZStack {
-            Backdrop()
+            if fullScreen { Wallpaper() }
+            Backdrop(within: fullScreen)
             Palette.ground.opacity(Glass.tint)
         }
     }
 
     private struct Backdrop: NSViewRepresentable {
+        let within: Bool
+
         func makeNSView(context: Context) -> NSVisualEffectView {
             let view = NSVisualEffectView()
             view.material = .sidebar
-            view.blendingMode = .behindWindow
             // Glass whether or not the window is in front: a sidebar that
             // turned to flat grey every time another app was clicked would
             // be a sidebar flickering between two designs.
             view.state = .active
+            updateNSView(view, context: context)
             return view
         }
 
-        func updateNSView(_ view: NSVisualEffectView, context: Context) {}
+        func updateNSView(_ view: NSVisualEffectView, context: Context) {
+            view.blendingMode = within ? .withinWindow : .behindWindow
+        }
+    }
+
+    /// The screen's wallpaper, placed as the desktop places it, so the part
+    /// under the column is the part that would have been behind it.
+    private struct Wallpaper: NSViewRepresentable {
+        func makeNSView(context: Context) -> WallpaperView { WallpaperView() }
+        func updateNSView(_ view: WallpaperView, context: Context) { view.needsLayout = true }
+    }
+}
+
+final class WallpaperView: NSView {
+    private let picture = CALayer()
+    private var shown: URL?
+    private static var images: [URL: NSImage] = [:]
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        layer?.backgroundColor = Palette.NS.ground.cgColor
+        picture.contentsGravity = .resizeAspectFill
+        picture.masksToBounds = true
+        layer?.addSublayer(picture)
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(self, selector: #selector(refresh), name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: NSApplication.didChangeScreenParametersNotification, object: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    deinit {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refresh()
+    }
+
+    override func layout() {
+        super.layout()
+        place()
+    }
+
+    @objc private func refresh() {
+        guard let screen = window?.screen,
+              let url = NSWorkspace.shared.desktopImageURL(for: screen)
+        else { return }
+        if url != shown {
+            shown = url
+            let image = WallpaperView.images[url] ?? NSImage(contentsOf: url)
+            WallpaperView.images[url] = image
+            picture.contents = image?.layerContents(forContentsScale: window?.backingScaleFactor ?? 2)
+        }
+        place()
+    }
+
+    /// The screen's rectangle, in this view: the window fills the screen in
+    /// full screen, so this is the column's slice of it.
+    private func place() {
+        guard let window, let screen = window.screen else { return }
+        let inWindow = window.convertFromScreen(screen.frame)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        picture.frame = convert(inWindow, from: nil)
+        CATransaction.commit()
     }
 }
 
