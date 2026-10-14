@@ -2758,11 +2758,18 @@ final class Browser: NSObject, ObservableObject {
         tabs.remove(at: index)
         removeEmptyGroup(tab.groupID)
         if activeID == tab.id {
-            // The neighbour on the right, or the last one if there is no
-            // right — through select(), same as everywhere else you land on
-            // a tab, so one that was never built yet actually wakes up
-            // instead of sitting there blank until a manual reload.
-            select(partner ?? tabs[min(index, tabs.count - 1)])
+            if partner == nil, !tab.isBlank, tabs.allSatisfy({ $0.pin != nil || $0.bench }) {
+                // The last tab that wasn't a pin: an empty tab takes its
+                // place, as when it was the only tab, rather than a pin you
+                // never asked for being woken (#537).
+                newTab()
+            } else {
+                // The neighbour on the right, or the last one if there is no
+                // right — through select(), same as everywhere else you land on
+                // a tab, so one that was never built yet actually wakes up
+                // instead of sitting there blank until a manual reload.
+                select(partner ?? tabs[min(index, tabs.count - 1)])
+            }
         }
         rememberSession()
     }
