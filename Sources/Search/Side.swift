@@ -95,7 +95,7 @@ struct SideBar: View {
         .background {
             ZStack {
                 if prefs.sideGlass {
-                    GlassGround()
+                    GlassGround(fullScreen: browser.fullScreen)
                     if landing { Glass.hover }
                 } else {
                     landing ? Palette.hover : Palette.ground
