@@ -9,6 +9,9 @@ import SwiftUI
 struct SideBar: View {
     @ObservedObject var browser: Browser
     @ObservedObject var prefs: Preferences
+    /// On the window's ground, beside the page's card (see CardEdge): the
+    /// ground's colour and no edge of its own, the card's edge being the line.
+    var onFrame = false
 
     @Namespace private var pill
     @Environment(\.glass) private var glass
@@ -98,7 +101,7 @@ struct SideBar: View {
                     GlassGround(fullScreen: browser.fullScreen)
                     if landing { Glass.hover }
                 } else {
-                    landing ? Palette.hover : Palette.ground
+                    landing ? Palette.sideHover : onFrame ? Palette.frame : Palette.ground
                 }
                 if prefs.splitView {
                     SplitDropZone(browser: browser, tab: nil, kind: .strip)
@@ -106,7 +109,7 @@ struct SideBar: View {
             }
         }
         .overlay(alignment: innerEdge) {
-            Rectangle().fill(prefs.sideGlass ? Glass.hairline : Palette.hairline).frame(width: 1)
+            if !onFrame { Rectangle().fill(prefs.sideGlass ? Glass.hairline : Palette.hairline).frame(width: 1) }
         }
         .overlay(alignment: innerEdge) { edge }
         .onDrop(of: [.url, .text], isTargeted: $landing) { providers in
@@ -632,12 +635,12 @@ private struct PinSquare: View {
                 // row is darker than the white it sits on (Drice: the live
                 // pin barely showed among the others).
                 RoundedRectangle(cornerRadius: scale * 9 / 34, style: .continuous)
-                    .fill(glass ? Glass.pinLive : Palette.pinLive)
+                    .fill(glass ? Glass.pinLive : Palette.sidePinLive)
                     .matchedGeometryEffect(id: "live", in: pill)
             } else {
                 RoundedRectangle(cornerRadius: scale * 9 / 34, style: .continuous)
                     .fill(glass ? (hovering ? Glass.hover : Glass.wash.opacity(0.55))
-                                : (hovering ? Palette.hover : Palette.wash.opacity(0.55)))
+                                : (hovering ? Palette.sideHover : Palette.sideTile))
             }
         }
         .contentShape(RoundedRectangle(cornerRadius: scale * 9 / 34, style: .continuous))
@@ -802,7 +805,7 @@ private struct SideRow: View {
     private var ground: some View {
         if live {
             ZStack(alignment: .leading) {
-                Rectangle().fill(glass ? Glass.wash : Palette.wash)
+                Rectangle().fill(glass ? Glass.wash : Palette.sideWash)
                 if prefs.showsReading {
                     GeometryReader { geo in
                         ReadingFill(meter: tab.meter, width: geo.size.width)
@@ -813,7 +816,7 @@ private struct SideRow: View {
             .matchedGeometryEffect(id: "live", in: pill)
         } else if hovering {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(glass ? Glass.hover : Palette.hover)
+                .fill(glass ? Glass.hover : Palette.sideHover)
         }
     }
 
@@ -849,7 +852,7 @@ struct Quiet: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(hovering ? (glass ? Glass.hover : Palette.hover) : .clear)
+                    .fill(hovering ? (glass ? Glass.hover : Palette.sideHover) : .clear)
             )
             .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
@@ -943,7 +946,7 @@ struct Door: View {
                 .frame(width: 26, height: 26)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(on ? (glass ? Glass.wash : Palette.wash) : (hovering ? (glass ? Glass.hover : Palette.hover) : .clear))
+                        .fill(on ? (glass ? Glass.wash : Palette.sideWash) : (hovering ? (glass ? Glass.hover : Palette.sideHover) : .clear))
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
