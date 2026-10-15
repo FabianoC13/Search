@@ -40,7 +40,7 @@ struct BookmarksBar: View {
         }
         .frame(height: BookmarksBar.height)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(onFrame ? Palette.frame : Palette.ground)
+        .background(onFrame ? (browser.prefs.sideGlass ? Color.clear : Palette.frame) : Palette.ground)
         .overlay(alignment: .bottom) {
             if !onFrame { Rectangle().fill(Palette.hairline).frame(height: 1) }
         }

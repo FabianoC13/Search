@@ -98,7 +98,10 @@ struct SideBar: View {
         .background {
             ZStack {
                 if prefs.sideGlass {
-                    GlassGround(fullScreen: browser.fullScreen)
+                    // On the frame, the window's ground is already the glass
+                    // (see ContentView); a second veil here would set the
+                    // column apart from the gaps around the page.
+                    if !onFrame { GlassGround(fullScreen: browser.fullScreen) }
                     if landing { Glass.hover }
                 } else {
                     landing ? Palette.sideHover : onFrame ? Palette.frame : Palette.ground
