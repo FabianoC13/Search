@@ -11,6 +11,10 @@ in [ROADMAP.md](ROADMAP.md).
 
 ## Unreleased
 
+### Added
+
+- Pins go back home, off unless you turn it on in Settings: as in Arc, a pinned tab closed with ⌘W, or open when Search quits, comes back at the page it was pinned at instead of wherever you went from there.
+
 ### Held back
 
 Not in this version, kept on main for a later one:

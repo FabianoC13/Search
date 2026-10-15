@@ -2753,7 +2753,7 @@ final class Browser: NSObject, ObservableObject {
         // its place, the page is let go, and you land on whatever you were
         // looking at before. Only Unpin takes it out of the row.
         if tab.pin != nil {
-            tab.rest()
+            tab.rest(at: prefs.pinsGoHome ? tab.home : nil)
             // Ordinary tabs first. Falling back to the most recent tab of any
             // kind meant closing one pin landed you on another pin, and ⌘W
             // bounced between the two instead of getting you out of them.
@@ -3633,14 +3633,19 @@ final class Browser: NSObject, ObservableObject {
         for (savedIndex, entry) in saved.tabs.enumerated() {
             // An empty page is never written; the first builds of Split View
             // on main wrote one for an empty half.
-            guard let url = URL(string: entry.url), entry.url != "about:blank" else { continue }
+            guard let saved = URL(string: entry.url), entry.url != "about:blank" else { continue }
+            // A row read from disk is a browser or window opened afresh: with
+            // pins going home, a pin comes back at the page it was pinned at,
+            // wherever it had been taken since.
+            let home = Browser.home(of: entry, at: saved)
+            let url = prefs.pinsGoHome ? home ?? saved : saved
             let tab = Tab(configuration: Web.configuration(space: space))
             prepare(tab)
-            tab.restore(url: url, title: entry.title, name: entry.name)
+            tab.restore(url: url, title: url == saved ? entry.title : url.host ?? "", name: entry.name)
             tab.pin = entry.pin
             tab.pinID = entry.pin == nil ? nil : entry.pinID
             tab.listed = entry.pin != nil && entry.listed == true
-            tab.home = Browser.home(of: entry, at: url)
+            tab.home = home
             tab.groupID = entry.pin == nil && groups.contains(where: { $0.id == entry.groupID })
                 ? entry.groupID : nil
             row.append(tab)
