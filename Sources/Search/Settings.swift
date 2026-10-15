@@ -455,6 +455,10 @@ struct SettingsPanel: View {
                 }
             }
             Rule()
+            Line("Pins go back home", "As in Arc: a pinned tab closed with ⌘W, or left open when Search quits, comes back at the page it was pinned at rather than wherever you went from there.") {
+                Switch(on: $prefs.pinsGoHome)
+            }
+            Rule()
             Line("Split View", "Show two tabs side by side. Drag a tab onto a page to pair them.") {
                 Switch(on: $prefs.splitView)
             }

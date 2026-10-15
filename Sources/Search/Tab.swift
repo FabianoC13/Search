@@ -1023,8 +1023,16 @@ final class Tab: ObservableObject, Identifiable {
     /// ⌘W on a pinned tab. The letter keeps its place in the row and the
     /// address is remembered; everything the page was holding is let go, so a
     /// pin you are not reading costs a line in a file and nothing else.
-    func rest() {
-        guard let url = address else { return }
+    /// Given `home`, it is put down there instead of where it was: Arc's pin
+    /// that goes back to its pinned page once closed (see Preferences.pinsGoHome).
+    func rest(at home: URL? = nil) {
+        guard let url = home ?? address else { return }
+        // The title was the page it is leaving; the host stands in until the
+        // pinned page is woken and names itself.
+        if let home, address != home {
+            address = home
+            title = home.host ?? ""
+        }
         pending = url
         memory = nil
         picture = nil
