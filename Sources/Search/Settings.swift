@@ -500,7 +500,7 @@ struct SettingsPanel: View {
                 Line(
                     "Offer passkeys",
                     !prefs.passkeysPossible
-                        ? "Needs an Apple entitlement this build doesn't have — off keeps sites to the password"
+                        ? "Kept by Search on this Mac, opened with Touch ID — this build can't reach your iCloud passkeys"
                         : Passkeys.access == .denied
                         ? "macOS was told no — System Settings › Privacy & Security › Passkeys Access for Web Browsers"
                         : "Touch ID or an iCloud passkey, on sites that offer one"

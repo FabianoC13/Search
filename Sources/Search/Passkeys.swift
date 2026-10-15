@@ -107,6 +107,7 @@ final class Passkeys: NSObject {
             Passkeys.changed(waiting.web)
             return
         }
+        if !Preferences.entitledToPasskeys { return OwnPasskeys.shared.cancel(token: token) }
         if token == self.token { controller?.cancel() } else { withdrawn = token }
     }
 
@@ -184,6 +185,10 @@ final class Passkeys: NSObject {
         if Store.testing {
             return settle(key, token: body["token"] as? String, [Offered(id: Passkeys.rehearsalID, name: "probe@\(rp)", provider: "Test")])
         }
+        // A build without the entitlement offers the passkeys it keeps itself.
+        if !Preferences.entitledToPasskeys {
+            return settle(key, token: body["token"] as? String, OwnPasskeys.shared.offered(for: rp, allowed: allowed))
+        }
         // Not asked for here: a site loading is no time for macOS's question.
         // Until it has been answered, the field offers none.
         guard Passkeys.access == .authorized else { return }
@@ -231,6 +236,10 @@ final class Passkeys: NSObject {
                                                  second: nil, for: Passkeys.pageKey(waiting.body))
             }
             return waiting.answer(reply)
+        }
+        if !Preferences.entitledToPasskeys {
+            return OwnPasskeys.shared.get(waiting.body, rp: waiting.rp, origin: waiting.origin, challenge: waiting.clientData.challenge,
+                                          only: id, in: web.window, answer: waiting.answer)
         }
         let request = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: waiting.rp)
             .createCredentialAssertionRequest(clientData: waiting.clientData)
@@ -297,6 +306,18 @@ final class Passkeys: NSObject {
         if let web = caller.web, caller.mainFrame, let waiting = conditional.removeValue(forKey: ObjectIdentifier(web)) {
             waiting.answer(Passkeys.failure("NotAllowedError", "A newer request took its place."))
             Passkeys.changed(web)
+        }
+
+        // Without the entitlement macOS refuses the requests below before any
+        // sheet: Search's own passkeys answer instead (see OwnPasskeys.swift).
+        if !Preferences.entitledToPasskeys, !Store.testing {
+            Passkeys.asked += 1
+            Passkeys.last = ["kind": kind, "rp": rp, "origin": origin, "requests": 1, "own": true]
+            switch kind {
+            case "get": return OwnPasskeys.shared.get(body, rp: rp, origin: origin, challenge: challenge, in: caller.window, answer: answer)
+            case "create": return OwnPasskeys.shared.create(body, rp: rp, origin: origin, challenge: challenge, answer: answer)
+            default: return refuse(answer, "NotSupportedError", "Not a passkey request.")
+            }
         }
 
         let requests: [ASAuthorizationRequest]

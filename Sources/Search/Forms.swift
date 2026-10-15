@@ -57,12 +57,11 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
 
     /// Whether sites are offered passkeys here (Settings › Passwords).
     ///
-    /// A build without Apple's browser entitlement can't do them: WebKit then
-    /// answers isUserVerifyingPlatformAuthenticatorAvailable() with false,
-    /// yet the API object exists, so sites offer the passkey path and strand
-    /// you there. Taken away, they go straight to the password. Signed with
-    /// the entitlement, as releases are, this is on, and Search carries out
-    /// the sites' requests itself (see Passkeys.swift).
+    /// Off, the passkey object is taken away and sites go straight to the
+    /// password. On, Search carries out the sites' requests itself (see
+    /// Passkeys.swift): with the Mac's passkeys in a build signed with
+    /// Apple's browser entitlement, as releases are, and with passkeys it
+    /// keeps itself in one without (OwnPasskeys.swift).
     static var passkeysOffered: Bool {
         get { Store.settings.bool(forKey: "passkeys") }
         set { Store.settings.set(newValue, forKey: "passkeys") }

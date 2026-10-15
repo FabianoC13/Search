@@ -154,13 +154,13 @@ final class Preferences: ObservableObject {
         didSet { store.set(extensionsInPrivate, forKey: "extensions.private") }
     }
     /// Whether sites may ask for a passkey here. Off sends them to the
-    /// password instead — the only thing that works in a build without
-    /// Apple's browser entitlement.
+    /// password instead.
     @Published var passkeys: Bool {
         didSet { store.set(passkeys, forKey: "passkeys") }
     }
-    /// Whether this build can actually do them: signed with the entitlement,
-    /// its profile embedded. Fixed for the life of the process.
+    /// Whether this build can use the Mac's own passkeys: signed with the
+    /// entitlement, its profile embedded. Without it Search keeps its own.
+    /// Fixed for the life of the process.
     let passkeysPossible: Bool
 
     /// Asked of the running process's own signature, which is the only thing
@@ -411,27 +411,22 @@ final class Preferences: ObservableObject {
         // Before the first page is loaded into the store.
         Store.keepsSignIns = keeps
         extensionsInPrivate = store.bool(forKey: "extensions.private")
-        // Offered by default only in a build that can actually do them —
-        // one with Apple's browser entitlement and its profile embedded. A
-        // choice made under the other kind of build is not a choice about
-        // this one: the first run of a build that can offers them, and the
-        // first run of one that can't — a release swapped for a build of your
-        // own — stops offering them, which would strand every sign-in on a
-        // passkey path that can only fail. From then on the switch is the
-        // person's. "passkeys.for" is the kind of build the switch was last
-        // set under; before it there was only "passkeys.entitled", which a
-        // build that couldn't wrote on its first run as well.
+        // Every build can do passkeys: one with Apple's browser entitlement
+        // and its profile uses the Mac's, one without keeps its own (see
+        // OwnPasskeys.swift). A choice made while they couldn't work is not a
+        // choice about them: the first run of a build that can offers them —
+        // the first with its own, and the first with the entitlement after
+        // one without — whatever was set before; from then on the switch is
+        // the person's.
         let entitled = Preferences.entitledToPasskeys
         passkeysPossible = entitled
-        let settledFor = store.object(forKey: "passkeys.for") as? Bool
-            ?? (entitled && store.bool(forKey: "passkeys.entitled") ? true : nil)
-        if settledFor != entitled {
-            passkeys = entitled
-            store.set(entitled, forKey: "passkeys")
+        if !store.bool(forKey: "passkeys.own") || (entitled && !store.bool(forKey: "passkeys.entitled")) {
+            passkeys = true
+            store.set(true, forKey: "passkeys")
         } else {
-            passkeys = store.object(forKey: "passkeys") as? Bool ?? entitled
+            passkeys = store.object(forKey: "passkeys") as? Bool ?? true
         }
-        store.set(entitled, forKey: "passkeys.for")
+        store.set(true, forKey: "passkeys.own")
         store.set(entitled, forKey: "passkeys.entitled")
         // A test run downloads into its own folder: ~/Downloads would have
         // macOS stop it to ask for access, with a dialog on the screen of
