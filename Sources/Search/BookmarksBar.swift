@@ -26,7 +26,7 @@ struct BookmarksBar: View {
                         if node.isFolder {
                             BookmarkMenu.shared.popUp(node)
                         } else if let text = node.url, let url = URL(string: text) {
-                            browser.visit(url)
+                            browser.openBookmark(url)
                         }
                     }
                     .overlay {
@@ -40,7 +40,7 @@ struct BookmarksBar: View {
         }
         .frame(height: BookmarksBar.height)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(onFrame ? Palette.frame : Palette.ground)
+        .background(onFrame ? (browser.prefs.sideGlass ? Color.clear : Palette.frame) : Palette.ground)
         .overlay(alignment: .bottom) {
             if !onFrame { Rectangle().fill(Palette.hairline).frame(height: 1) }
         }

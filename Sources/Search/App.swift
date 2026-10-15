@@ -381,7 +381,15 @@ struct ContentView: View {
             // that survives the transition is not a white band across the top.
             // With the tabs down the side, the ground the page's card and the
             // column sit on (see CardEdge).
-            (fullscreenTab != nil ? Color.black : cards ? Palette.frame : Palette.ground)
+            //
+            // The column made of glass (Settings › Tabs) makes that ground
+            // glass, gaps and all, so the page's card sits on the desktop
+            // the column shows rather than on a dark frame beside it.
+            if fullscreenTab == nil, cards, browser.prefs.sideGlass {
+                GlassGround(fullScreen: browser.fullScreen)
+            } else {
+                (fullscreenTab != nil ? Color.black : cards ? Palette.frame : Palette.ground)
+            }
 
             // One stage, always. It starts beside the column and under the
             // strip, not behind them — a page sliding beneath floating chrome

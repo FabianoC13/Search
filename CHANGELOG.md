@@ -14,6 +14,8 @@ in [ROADMAP.md](ROADMAP.md).
 ### Added
 
 - Pins go back home, off unless you turn it on in Settings: as in Arc, a pinned tab closed with ⌘W, or open when Search quits, comes back at the page it was pinned at instead of wherever you went from there.
+### Changed
+- A bookmark opens in a tab of its own, from the bookmarks bar, the Bookmarks menu or the list: opened from a pinned tab it used to take the pin's place. An empty new tab is used as it is, and ⌘ opens the bookmark behind the tab you are on.
 
 ### Held back
 

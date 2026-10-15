@@ -86,6 +86,8 @@ enum Glass {
     static let wash = Color(nsColor: veil(0.07, 0.09))
     static let pinLive = Color(nsColor: veil(0.11, 0.13))
     static let hover = Color(nsColor: veil(0.04, 0.05))
+    /// The resting pin squares.
+    static let tile = Color(nsColor: veil(0.04, 0.05))
     static let hairline = Color(nsColor: veil(0.09, 0.08))
     /// Laid over the blur: how much of the ground colour stays. Enough, in
     /// a dark window, that a bright wallpaper comes through at about a

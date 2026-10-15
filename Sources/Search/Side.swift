@@ -98,7 +98,10 @@ struct SideBar: View {
         .background {
             ZStack {
                 if prefs.sideGlass {
-                    GlassGround(fullScreen: browser.fullScreen)
+                    // On the frame, the window's ground is already the glass
+                    // (see ContentView); a second veil here would set the
+                    // column apart from the gaps around the page.
+                    if !onFrame { GlassGround(fullScreen: browser.fullScreen) }
                     if landing { Glass.hover }
                 } else {
                     landing ? Palette.sideHover : onFrame ? Palette.frame : Palette.ground
@@ -522,7 +525,7 @@ struct SideBar: View {
     private static let footHeight: CGFloat = 26 + 10
 
     private var newTab: some View {
-        Quiet(icon: "plus", title: "New tab", height: SideBar.row) { browser.launch() }
+        Quiet(icon: "plus", title: "New tab", height: SideBar.row) { browser.newTab() }
             .padding(.top, SideBar.gap)
     }
 
@@ -639,7 +642,7 @@ private struct PinSquare: View {
                     .matchedGeometryEffect(id: "live", in: pill)
             } else {
                 RoundedRectangle(cornerRadius: scale * 9 / 34, style: .continuous)
-                    .fill(glass ? (hovering ? Glass.hover : Glass.wash.opacity(0.55))
+                    .fill(glass ? (hovering ? Glass.hover : Glass.tile)
                                 : (hovering ? Palette.sideHover : Palette.sideTile))
             }
         }
