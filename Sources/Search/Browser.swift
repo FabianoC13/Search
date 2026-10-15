@@ -3652,6 +3652,8 @@ final class Browser: NSObject, ObservableObject {
     /// them. A link from another app, with a pin in front, landed between two
     /// (#219).
     func placeForNew() -> Int {
+        // Settings › Tabs › Open new tabs at the end.
+        if prefs.newTabsAtEnd { return tabs.count }
         guard let here = tabs.firstIndex(where: { $0.id == activeID }) else { return tabs.count }
         let after = activeSplit.flatMap { pair in tabs.firstIndex { $0.id == pair.right } } ?? here
         return max(after + 1, pinnedCount)
