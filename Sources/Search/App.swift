@@ -1067,6 +1067,24 @@ struct ContentView: View {
                 guard browser.prefs.escapeTwice else { return event }
                 return FullScreenEscape.shared.passes(event, to: page) ? event : nil
             }
+            // Escape in this window while it is itself in macOS full screen
+            // (the green button, ⌃⌘F). Nothing in Search wanting it, it went
+            // on through the page to AppKit, which takes the window out of
+            // full screen on it: one press, whatever it was meant for. With
+            // Esc twice asked for, Search's own Escape jobs still go first and
+            // at one press — the find bar, the address field, a peek, a panel,
+            // a rename, a new tab never sent anywhere, the ⌃Tab switcher —
+            // and a press none of them wants is kept from the page and from
+            // AppKit and counted instead (see FullScreenEscape): the first
+            // puts the reminder up, a second within two seconds leaves. Held
+            // down, its repeats are kept and count for nothing.
+            if event.keyCode == 53, browser.prefs.escapeTwice, let window, event.window === window,
+               window.styleMask.contains(.fullScreen) {
+                if event.isARepeat { return nil }
+                if take(event) { return nil }
+                FullScreenEscape.shared.press(event, leaving: window)
+                return nil
+            }
             return take(event) ? nil : event
         }
         ContentView.keyHooks[ObjectIdentifier(browser)] = { event in take(event) ? nil : event }

@@ -18,9 +18,24 @@ import WebKit
 // counts, as a press or as time. Leaving full screen any other way, the
 // page's own button, takes the reminder with it at once.
 //
+// The window itself in macOS full screen (the green button, ⌃⌘F) is the
+// full screen people mean most (fab, 23 Oct 2026), and it went the same way:
+// an Escape nothing in Search wanted went on through the page to AppKit,
+// which took the window out of full screen on it. Its key never came near
+// the check above, which looked only for a page WebKit had in its own
+// window, so the switch did nothing there. Now the key monitor counts such a
+// press here (see `press(_:leaving:)`) once Search's own Escape jobs have
+// passed it over — a find bar, the address field, a peek, a panel: those go
+// at one press, as before, and count for nothing. A counted press is kept
+// from the page and from AppKit; the first puts the reminder up, a second
+// within `within` takes the window out of full screen, with the same clock,
+// the same held-key rule and the same reminder as a page's. Leaving full
+// screen any other way, the green button, ⌃⌘F or the menu, takes the reminder
+// with it.
+//
 // The reminder is a small pill of its own, a child of the window the key went
-// to: WebKit's full-screen window in real use, so it is in that full screen's
-// Space and goes where it goes. It never becomes key and the pointer goes
+// to: WebKit's full-screen window for a page, the browser's own for the
+// window, so it is in that full screen's Space and goes where it goes. It never becomes key and the pointer goes
 // through it, so the page keeps the keys and the clicks. A test run keeps it
 // off every screen, as the recording pill does: whether it is up is what is
 // tested there (Bench, probe).
@@ -47,6 +62,10 @@ final class FullScreenEscape {
     private weak var page: PageView?
     /// When the wait is over, on the clock key events are stamped with.
     private var deadline: TimeInterval = 0
+    /// The browser window waiting for its second press leaving full screen,
+    /// or closing, by itself: watched, as a page is, until the reminder has
+    /// gone.
+    private var windowWatch: [NSObjectProtocol] = []
     private var expiry: DispatchWorkItem?
     /// The page leaving full screen by itself: WebKit's word, and the
     /// tab's, which is also how the bench fakes it (Tab.immersed). Watched
@@ -127,8 +146,39 @@ final class FullScreenEscape {
         return false
     }
 
-    private func arm(_ window: NSWindow, page: PageView, at now: TimeInterval) {
-        if self.page !== page || leaving == nil { watch(page) }
+    /// An Escape in a browser window that is itself in macOS full screen,
+    /// which none of Search's own Escape jobs wanted (ContentView.watchKeys),
+    /// with the switch on: the key monitor keeps it from the page and from
+    /// AppKit whatever is decided here. A first press puts the reminder up;
+    /// the second in the same window within `within` takes the window out of
+    /// full screen. Repeats of a key held down never get here.
+    func press(_ event: NSEvent, leaving window: NSWindow) {
+        if let decided, PageView.same(decided.event, event) {
+            Self.log.notice("Escape asked again in the window's full screen, decided before")
+            return
+        }
+        decided = (event, false)
+        let now = event.timestamp
+        let waiting = self.window === window && page == nil && now < deadline
+        Self.log.notice("Escape at \(now, privacy: .public) in the window's full screen, \(waiting ? "the second" : "a first", privacy: .public) press: wait until \(self.deadline, privacy: .public)")
+        keepKeyUp()
+        if waiting {
+            disarm()
+            window.toggleFullScreen(nil)
+            return
+        }
+        arm(window, page: nil, at: now)
+    }
+
+    private func arm(_ window: NSWindow, page: PageView?, at now: TimeInterval) {
+        if let page {
+            unwatchWindow()
+            if self.page !== page || leaving == nil { watch(page) }
+        } else {
+            leaving = nil
+            immersion = nil
+            if self.window !== window || self.page != nil || windowWatch.isEmpty { watch(window) }
+        }
         self.window = window
         self.page = page
         deadline = now + Self.within
@@ -183,12 +233,30 @@ final class FullScreenEscape {
         end()
     }
 
-    /// The reminder gone, faded or not, and the page no longer watched.
+    /// The reminder gone, faded or not, and the page or window no longer
+    /// watched.
     private func end() {
         fading = false
         leaving = nil
         immersion = nil
+        unwatchWindow()
         if let panel { takeAway(panel) }
+    }
+
+    /// A browser window waiting for its second press: leaving full screen
+    /// some other way, or closing, ends the wait and takes the reminder.
+    private func watch(_ window: NSWindow) {
+        unwatchWindow()
+        for name in [NSWindow.willExitFullScreenNotification, NSWindow.willCloseNotification] {
+            windowWatch.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.disarm() }
+            })
+        }
+    }
+
+    private func unwatchWindow() {
+        windowWatch.forEach(NotificationCenter.default.removeObserver)
+        windowWatch = []
     }
 
     private func watch(_ page: PageView) {
@@ -245,7 +313,7 @@ final class FullScreenEscape {
         fading = false
         let panel = self.panel ?? ReminderPanel()
         self.panel = panel
-        guard !Store.testing else { return }
+        guard !Store.testing || ProcessInfo.processInfo.environment["SEARCH_PROBE_SHOWN"] != nil else { return }
         // Over another full screen's window: off the one before first, so it
         // isn't left behind in that Space, and in afresh, faded in.
         if panel.parent !== window { takeAway(panel) }
@@ -311,9 +379,9 @@ private final class ReminderPanel: NSPanel {
 }
 
 /// What the pill says, light on dark whatever the appearance, since it lies
-/// over a video: "Press Esc again to leave full screen", the key as a key.
+/// over a video: "Press Esc again to exit full screen", the key as a key.
 private struct ReminderView: View {
-    static let words = "Press Esc again to leave full screen"
+    static let words = "Press Esc again to exit full screen"
 
     var body: some View {
         HStack(spacing: 6) {
@@ -324,7 +392,7 @@ private struct ReminderView: View {
                 .frame(height: 20)
                 .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.6), lineWidth: 1))
-            Text("again to leave full screen")
+            Text("again to exit full screen")
         }
         .font(.system(size: 14, weight: .medium))
         .foregroundStyle(Color.white)
