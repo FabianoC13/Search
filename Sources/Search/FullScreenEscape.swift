@@ -10,12 +10,12 @@ import WebKit
 // the key monitor (ContentView.watchKeys) keeps the first press from WebKit
 // and the page, its key-up too, and a reminder comes up over the video; a
 // second press in the same full screen goes on, and WebKit leaves. The
-// second counts within `within` of the first by the keys' own clock, or for
-// as long as the reminder still shows, so what it says and what the key
-// does never disagree. A key held down sends Escape again and again: each is
-// kept too and keeps the reminder up, so holding it never counts as the
-// second press. Leaving full screen any other way, the page's own button,
-// takes the reminder with it at once.
+// second counts only within `within` of the first, by the keys' own clock: a
+// quick double press, as in Arc, never one saved up. Once the time is up the
+// count is back to nothing, the reminder goes, and the next press is a first
+// again. A key held down sends Escape again and again: each is kept and none
+// counts, as a press or as time. Leaving full screen any other way, the
+// page's own button, takes the reminder with it at once.
 //
 // The reminder is a small pill of its own, a child of the window the key went
 // to: WebKit's full-screen window in real use, so it is in that full screen's
@@ -35,9 +35,12 @@ final class FullScreenEscape {
     private(set) var showing = false
 
     /// The full screen waiting for its second press: the window the first
-    /// went to, and the page in it. Kept, with the deadline, after the
-    /// reminder has gone, for a second press the main thread was too busy to
-    /// get to in time: its own timestamp still says it came within.
+    /// went to, and the page in it. The deadline alone says whether a press
+    /// is the second, by its own timestamp, so one the main thread was too
+    /// busy to get to in time still counts; the reminder, up or fading, has
+    /// no say. It was once read as "still waiting" too, and a fade whose end
+    /// never came over a real full screen kept the wait open for good: any
+    /// later Escape, however late, left.
     private weak var window: NSWindow?
     private weak var page: PageView?
     /// When the wait is over, on the clock key events are stamped with.
@@ -56,6 +59,10 @@ final class FullScreenEscape {
     private var fades = 0
     /// The key-up of a press kept from the page, kept too (see keepKeyUp).
     private var keepsKeyUp = false
+    /// Whether the press still down, if it is held, was one kept: its
+    /// repeats then keep their key-ups too, and its last one never reaches
+    /// the page without the key-down it went with.
+    private var heldKept = false
     private var keyUps: Any?
 
     /// An Escape on its way to a page that fills the screen, with the switch
@@ -64,28 +71,28 @@ final class FullScreenEscape {
     func passes(_ event: NSEvent, to page: PageView) -> Bool {
         guard let window = event.window else { return true }
         let now = event.timestamp
-        let waiting = self.window === window && self.page === page && (now < deadline || showing || fading)
+        let waiting = self.window === window && self.page === page && now < deadline
+        // Held down: kept, and nothing more. It is neither a second press nor
+        // more time for one; once the second has gone on, its own repeats
+        // are kept too, and bring nothing up.
         if event.isARepeat {
-            // Held down: kept, and the wait starts again from this one, so
-            // the press after letting go is the second. Once the second has
-            // gone on, its own repeats are kept too, and bring nothing up.
-            if waiting {
-                arm(window, page: page, at: now)
-                keepKeyUp()
-            }
+            if heldKept { keepKeyUp() }
             return false
         }
         // On its way out already: there is nothing left to guard.
         if page.fullscreenState == .exitingFullscreen {
             disarm()
+            heldKept = false
             return true
         }
         if waiting {
             disarm()
+            heldKept = false
             return true
         }
         arm(window, page: page, at: now)
         keepKeyUp()
+        heldKept = true
         return false
     }
 
@@ -105,26 +112,29 @@ final class FullScreenEscape {
 
     /// The wait is over: the reminder fades, and the next press is a first
     /// again. The page is watched until the fade is done, so leaving full
-    /// screen meanwhile still takes the pill at once.
+    /// screen meanwhile still takes the pill at once. The fade is ended by
+    /// the clock rather than by the animation's word that it finished, which
+    /// a window in another full screen's Space can't be counted on to give.
+    /// The key-up of a first press still held stays kept (see keepKeyUp).
     private func expire() {
         expiry = nil
         showing = false
-        keepsKeyUp = false
         guard let panel, !Motion.reduced, panel.isVisible else { return end() }
         fading = true
         fades += 1
         let fade = fades
-        NSAnimationContext.runAnimationGroup({ context in
+        NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.2
             panel.animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             // Up again for a new first press while it faded, or taken away
             // already: it stays as it is.
             MainActor.assumeIsolated {
                 guard let self, self.fading, self.fades == fade else { return }
                 self.end()
             }
-        })
+        }
     }
 
     /// The wait over at once: the second press has gone on to WebKit, or
