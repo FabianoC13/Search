@@ -208,13 +208,17 @@ final class TabDrag: ObservableObject {
         // to eat the next Escape anywhere, one meant for a video's full
         // screen too, which then took two.
         escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53, NSEvent.pressedMouseButtons & 1 != 0 else { return event }
-            self?.cancel()
+            guard event.keyCode == 53, NSEvent.pressedMouseButtons & 1 != 0,
+                  let self, self.gestureTab != nil else { return event }
+            self.cancel()
             return nil
         }
     }
 
     private func cancel() {
+        // The monitor goes first: a drag whose tab has gone has nothing to
+        // cancel, and kept, its monitor would go on asking.
+        removeMonitor()
         guard let gestureTab else { return }
         cancelledID = gestureTab.id
         preview = nil

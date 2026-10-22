@@ -1184,7 +1184,12 @@ struct ContentView: View {
             // so the key came here first and put away what was left up in
             // the window behind the video, a find bar or the address field,
             // and only the second press reached the page.
-            if event.keyCode == 53, ContentView.fillsScreen(event) { return event }
+            // A ⌃Tab switcher up behind it goes too, or letting ⌃ go would
+            // switch tabs as the page comes back.
+            if event.keyCode == 53, ContentView.fillsScreen(event) {
+                if browser.tabSwitcher.active { browser.tabSwitcher.cancel() }
+                return event
+            }
             if browser.holdKey(event) { return nil }
             return take(event) ? nil : event
         }
