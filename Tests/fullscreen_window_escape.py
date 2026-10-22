@@ -43,7 +43,7 @@ try:
     sv.quit(); time.sleep(1)
 
     # The fix: switch on (fab's build's default).
-    sv.setup(**{"sidebar": True}); launch_shown()
+    sv.setup(**{"sidebar": True, "fullscreen.escapeTwice": True}); launch_shown()
     a = sv.page("a"); sv.cmd({"do": "select", "id": a}); time.sleep(1)
     sv.cmd({"do": "key", "id": a, "text": "x"}); time.sleep(0.3)
     t.ok("window goes full screen", full(True) is True)
