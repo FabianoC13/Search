@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""One Escape leaves a page's full screen, in a hidden probe.
+"""One Escape leaves a page's full screen, or two with Settings › General ›
+Press Esc twice to leave full screen, in a hidden probe.
 
 Build first (`./build.sh`), then `python3 Tests/fullscreen_escape.py`.
 Nothing goes full screen: the page's own word that it is going
@@ -10,13 +11,24 @@ monitor sees it first, as a real press. A video's full screen took two
 presses to leave (fab, 22 Oct 2026): WebKit's full-screen window isn't a
 browser's, its keys went to the browser in front, and Escape there put
 away what was left up behind the video, the find bar or the address
-field, before the page had it. Checked here: with a page filling the
-screen, the first Escape reaches the page and leaves the find bar, the
-field and a peek where they are, alone or in a pair, with the page's own
-Escape listener on it too; a key the page doesn't use is still kept
-quiet (#402); and with no page filling the screen, Escape still puts
-those away. WebKit's own part, the video leaving on that key, is checked
-by hand on a release candidate.
+field, before the page had it. Checked here, with the switch off: with a
+page filling the screen, the first Escape reaches the page and leaves the
+find bar, the field and a peek where they are, alone or in a pair, with
+the page's own Escape listener on it too, and no reminder comes up; a key
+the page doesn't use is still kept quiet (#402); and with no page filling
+the screen, Escape still puts those away.
+
+With the switch on, as in Arc (fab, 22 Oct 2026): the first Escape is
+kept from the page and the reminder is up (the probe's escapeReminder;
+a test run keeps the pill itself off every screen); a second within two
+seconds reaches the page and takes the reminder away; Escape held down
+never reaches the page, however long, and the press after letting go is
+the second; once the two seconds are over the next Escape is a first
+again; the page leaving full screen by itself takes the reminder away;
+and with no page filling the screen, Escape closes the find bar at the
+first press. Alone and in either pane of a pair. WebKit's own part, the
+video leaving on that key, and the pill as it shows over a real full
+screen, are checked by hand on a release candidate.
 """
 import sys
 import time
@@ -64,8 +76,10 @@ def keys_to(tab):
     return sv.cmd({"do": "key", "id": tab, "text": "x"})
 
 
-def esc():
-    sv.cmd({"do": "press", "code": 53, "chars": ESC}); time.sleep(0.4)
+def esc(held=False):
+    """Escape pressed through the app's queue; held, the press a key held
+    down sends again and again."""
+    sv.cmd({"do": "press", "code": 53, "chars": ESC, "mods": ["repeat"] if held else []}); time.sleep(0.4)
 
 
 def immerse(tab, on):
@@ -79,7 +93,8 @@ def immerse(tab, on):
 def state():
     p = sv.cmd({"do": "probe"}); st = sv.sp("state")
     return {"finding": st["finding"], "field": p["field"], "peek": p["peek"],
-            "quieted": p["keysQuieted"], "responder": p["responder"]}
+            "quieted": p["keysQuieted"], "responder": p["responder"],
+            "reminder": p.get("escapeReminder")}
 
 
 def find_bar():
@@ -110,6 +125,7 @@ def run(t, name, split):
     seen = saw(a)
     t.ok(f"{name}: full screen, the first Escape reaches the page", "keydown:Escape" in seen, (seen, s))
     t.ok(f"{name}: full screen, the find bar behind stays", s["finding"], s)
+    t.ok(f"{name}: full screen, with Esc twice off no reminder comes up", s["reminder"] is False, s)
     t.ok(f"{name}: full screen, nothing comes back to be kept quiet", s["quieted"] == before["quieted"], (before, s))
 
     # The page's own Escape listener, taking the key: still the page's.
@@ -169,11 +185,98 @@ def run(t, name, split):
     sv.quit()
 
 
+def twice(t, name, a):
+    """The two presses on page a, filling the screen, with the find bar left
+    up behind it: the first kept and the reminder up, the second the page's
+    and the reminder gone, the find bar there all along."""
+    find_bar(); keys_to(a); saw(a)
+    esc(); s = state()
+    seen = saw(a)
+    t.ok(f"{name}: the first Escape doesn't reach the page, and the reminder is up",
+         "keydown:Escape" not in seen and s["reminder"] is True, (seen, s))
+    esc(); s = state()
+    seen = saw(a)
+    t.ok(f"{name}: a second within two seconds reaches the page, and the reminder is gone",
+         "keydown:Escape" in seen and s["reminder"] is False, (seen, s))
+    t.ok(f"{name}: the find bar behind stays through both", s["finding"], s)
+
+
+def run_twice(t, name, split):
+    """Settings › General › Press Esc twice to leave full screen, on."""
+    sv.setup(**{"sidebar": True, "splitView": split, "fullscreen.escapeTwice": True}); sv.launch()
+    name = f"{name}, Esc twice"
+    a = sv.page("a")
+    if split:
+        b = sv.page("b")
+        sv.sp("pair", id=b, **{"with": a}, side="right"); time.sleep(0.8)
+        sv.sp("focus", id=a); time.sleep(0.4)
+    time.sleep(0.6)
+    listen(a)
+
+    # Not filling the screen: Escape is the window's, at the first press.
+    find_bar(); keys_to(a); saw(a)
+    esc(); s = state()
+    t.ok(f"{name}: no full screen, the first Escape closes the find bar", not s["finding"], s)
+    t.ok(f"{name}: no full screen, the page doesn't see it and no reminder comes up",
+         "keydown:Escape" not in saw(a) and s["reminder"] is False, s)
+
+    immerse(a, True)
+    twice(t, name, a)
+
+    # Held down: never the second press, however long.
+    esc()
+    for _ in range(6):
+        esc(held=True)
+    s = state(); seen = saw(a)
+    t.ok(f"{name}: Escape held down past two seconds never reaches the page, and the reminder stays",
+         "keydown:Escape" not in seen and s["reminder"] is True, (seen, s))
+    esc(); s = state()
+    seen = saw(a)
+    t.ok(f"{name}: the press after letting go is the second", "keydown:Escape" in seen and s["reminder"] is False, (seen, s))
+    # That second press held down: its repeats are kept, and bring nothing up.
+    esc(held=True); esc(held=True); s = state()
+    seen = saw(a)
+    t.ok(f"{name}: the second press held down reaches the page no more, with no reminder",
+         "keydown:Escape" not in seen and s["reminder"] is False, (seen, s))
+
+    # The two seconds over: the next Escape is a first again.
+    esc(); s = state()
+    up = s["reminder"]
+    time.sleep(2.6); s = state()
+    t.ok(f"{name}: two seconds on, the reminder has gone by itself", up is True and s["reminder"] is False, (up, s))
+    esc(); s = state()
+    seen = saw(a)
+    t.ok(f"{name}: after the wait, the next Escape is kept again with the reminder up",
+         "keydown:Escape" not in seen and s["reminder"] is True, (seen, s))
+
+    # The page leaving full screen by itself takes the reminder with it.
+    immerse(a, False); s = state()
+    t.ok(f"{name}: the page leaving full screen by itself takes the reminder away", s["reminder"] is False, s)
+
+    # Back from full screen, Escape is the window's again, at the first press.
+    find_bar(); keys_to(a); saw(a)
+    esc(); s = state()
+    t.ok(f"{name}: back from full screen, the first Escape closes the find bar", not s["finding"], s)
+    t.ok(f"{name}: back from full screen, the page doesn't see it and no reminder comes up",
+         "keydown:Escape" not in saw(a) and s["reminder"] is False, s)
+
+    if split:
+        # The other pane of the pair filling the screen.
+        sv.sp("focus", id=b); time.sleep(0.4)
+        listen(b)
+        immerse(b, True)
+        twice(t, f"{name}, the right pane", b)
+        immerse(b, False)
+    sv.quit()
+
+
 def main():
     t = sv.T()
     try:
         run(t, "alone", False)
         run(t, "Split View pair", True)
+        run_twice(t, "alone", False)
+        run_twice(t, "Split View pair", True)
     finally:
         t.done(); sv.finish()
     sys.exit(1 if t.failed else 0)
