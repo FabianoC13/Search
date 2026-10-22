@@ -294,8 +294,9 @@ final class Preferences: ObservableObject {
     }
     /// Escape on a page filling the screen leaves only when pressed twice
     /// within two seconds, as in Arc; the first puts up a reminder (see
-    /// FullScreenEscape). Off unless asked for: one press leaves, as in
-    /// Safari.
+    /// FullScreenEscape). On in fab's build unless turned off, since that is
+    /// what he asked for (upstream has it off until asked for); off, one
+    /// press leaves, as in Safari.
     @Published var escapeTwice: Bool {
         didSet { store.set(escapeTwice, forKey: "fullscreen.escapeTwice") }
     }
@@ -482,7 +483,7 @@ final class Preferences: ObservableObject {
         Float.flicks = flicks
         floatsAway = store.bool(forKey: "float.away")
         floatsOnLeave = store.object(forKey: "float.leave") as? Bool ?? true
-        escapeTwice = store.bool(forKey: "fullscreen.escapeTwice")
+        escapeTwice = store.object(forKey: "fullscreen.escapeTwice") as? Bool ?? true
         waitsForPlay = store.bool(forKey: Preferences.waitsKey)
         installsUpdates = store.object(forKey: Updater.installKey) as? Bool ?? true
         peeksLinks = store.object(forKey: "links.peek") as? Bool ?? true
