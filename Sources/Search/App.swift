@@ -1185,10 +1185,13 @@ struct ContentView: View {
             // the window behind the video, a find bar or the address field,
             // and only the second press reached the page.
             // A ⌃Tab switcher up behind it goes too, or letting ⌃ go would
-            // switch tabs as the page comes back.
-            if event.keyCode == 53, ContentView.fillsScreen(event) {
+            // switch tabs as the page comes back. With Esc twice asked for
+            // (Settings › General), as in Arc, the first press only puts a
+            // reminder up (see FullScreenEscape).
+            if event.keyCode == 53, let page = ContentView.pageFillingScreen(event) {
                 if browser.tabSwitcher.active { browser.tabSwitcher.cancel() }
-                return event
+                guard browser.prefs.escapeTwice else { return event }
+                return FullScreenEscape.shared.passes(event, to: page) ? event : nil
             }
             if browser.holdKey(event) { return nil }
             return take(event) ? nil : event
@@ -1213,13 +1216,14 @@ struct ContentView: View {
         return Browsers.acting === browser
     }
 
-    /// Whether a key goes to a page that fills the screen: one WebKit has in
-    /// its own window, where the page's view takes the keys, or one whose
-    /// page said it is going (Tab.immersed, which is how the bench fakes it).
-    private static func fillsScreen(_ event: NSEvent) -> Bool {
-        guard let page = event.window?.firstResponder as? PageView else { return false }
-        return page.fullscreenState != .notInFullscreen
+    /// The page a key goes to, if it fills the screen: one WebKit has in its
+    /// own window, where the page's view takes the keys, or one whose page
+    /// said it is going (Tab.immersed, which is how the bench fakes it).
+    private static func pageFillingScreen(_ event: NSEvent) -> PageView? {
+        guard let page = event.window?.firstResponder as? PageView else { return nil }
+        let fills = page.fullscreenState != .notInFullscreen
             || Browsers.all.contains { $0.tabs.contains { $0.immersed && $0.built === page } }
+        return fills ? page : nil
     }
 
     /// The same handling the key monitor gives an event, for the bench to
