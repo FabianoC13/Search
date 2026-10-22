@@ -203,8 +203,12 @@ final class TabDrag: ObservableObject {
         sourceBrowser = browser
         gestureTab = tab
         sourceTab = sourceHalf(browser: browser, gesture: tab, at: origin)
+        // Escape is the drag's only while the button is down. A gesture
+        // taken away mid-drag never says it ended, and its monitor stayed
+        // to eat the next Escape anywhere, one meant for a video's full
+        // screen too, which then took two.
         escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53 else { return event }
+            guard event.keyCode == 53, NSEvent.pressedMouseButtons & 1 != 0 else { return event }
             self?.cancel()
             return nil
         }

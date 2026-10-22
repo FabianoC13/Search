@@ -1179,6 +1179,12 @@ struct ContentView: View {
                 if !event.modifierFlags.contains(.command) { browser.landSummon() }
                 return event
             }
+            // Escape on a page filling the screen is WebKit's, which leaves
+            // on the first one, as Safari does. Its window isn't a browser's,
+            // so the key came here first and put away what was left up in
+            // the window behind the video, a find bar or the address field,
+            // and only the second press reached the page.
+            if event.keyCode == 53, ContentView.fillsScreen(event) { return event }
             if browser.holdKey(event) { return nil }
             return take(event) ? nil : event
         }
@@ -1200,6 +1206,15 @@ struct ContentView: View {
     private func mine(_ event: NSEvent) -> Bool {
         if let window = event.window, Browsers.browser(for: window) != nil { return window === self.window }
         return Browsers.acting === browser
+    }
+
+    /// Whether a key goes to a page that fills the screen: one WebKit has in
+    /// its own window, where the page's view takes the keys, or one whose
+    /// page said it is going (Tab.immersed, which is how the bench fakes it).
+    private static func fillsScreen(_ event: NSEvent) -> Bool {
+        guard let page = event.window?.firstResponder as? PageView else { return false }
+        return page.fullscreenState != .notInFullscreen
+            || Browsers.all.contains { $0.tabs.contains { $0.immersed && $0.built === page } }
     }
 
     /// The same handling the key monitor gives an event, for the bench to
