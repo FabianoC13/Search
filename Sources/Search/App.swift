@@ -1070,6 +1070,7 @@ struct ContentView: View {
             return take(event) ? nil : event
         }
         ContentView.keyHooks[ObjectIdentifier(browser)] = { event in take(event) ? nil : event }
+        FullScreenEscape.monitorMade(for: browser)
     }
 
     /// Whether a key is this window's to act on.

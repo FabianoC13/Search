@@ -749,7 +749,10 @@ final class Bench {
                     timestamp: ProcessInfo.processInfo.systemUptime,
                     // "sheet": to the question hanging from the window, as a
                     // key typed while it is up goes to it.
-                    windowNumber: (request["sheet"] as? Bool == true ? browser.window?.attachedSheet : nil)?.windowNumber
+                    // "page": to the window the front page is in, which is
+                    // WebKit's own while the page fills the screen.
+                    windowNumber: (request["page"] as? Bool == true ? browser.active?.built?.window : nil)?.windowNumber
+                        ?? (request["sheet"] as? Bool == true ? browser.window?.attachedSheet : nil)?.windowNumber
                         ?? (browser.window ?? Links.window)?.windowNumber ?? 0, context: nil,
                     characters: chars, charactersIgnoringModifiers: chars,
                     isARepeat: repeats && type == .keyDown, keyCode: UInt16(code)

@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import os
 import SwiftUI
 import WebKit
 
@@ -27,6 +28,7 @@ import WebKit
 @MainActor
 final class FullScreenEscape {
     static let shared = FullScreenEscape()
+    private static let log = Logger(subsystem: "com.officecommun.search", category: "Escape")
 
     /// How long after the first press a second one still leaves.
     static let within: TimeInterval = 2
@@ -65,10 +67,38 @@ final class FullScreenEscape {
     private var heldKept = false
     private var keyUps: Any?
 
+    /// Key monitors made for each browser, for the log: more than one for
+    /// the same browser is how a press came to be asked about twice.
+    private static var monitors: [ObjectIdentifier: Int] = [:]
+    static func monitorMade(for browser: Browser) {
+        let id = ObjectIdentifier(browser)
+        monitors[id, default: 0] += 1
+        log.notice("Key monitor made, \(monitors[id] ?? 0, privacy: .public) for this browser, \(Browsers.all.count, privacy: .public) browsers")
+    }
+
+    /// The last press decided, and what was decided. The same press can be
+    /// asked about again: by a second key monitor of the same browser, whose
+    /// ContentView SwiftUI made afresh without taking the old one's monitor
+    /// away, or by WebKit handing a key it didn't use back through the app.
+    /// Each time it was counted anew, so the second press, let go on by the
+    /// first asking, was a first press to the next and kept: Escape never
+    /// left at all (fab, 22 Oct 2026). Now a press is decided once.
+    private var decided: (event: NSEvent, passes: Bool)?
+
     /// An Escape on its way to a page that fills the screen, with the switch
     /// on: true lets it go on to WebKit, which leaves full screen; false
     /// keeps it, and the reminder says to press again.
     func passes(_ event: NSEvent, to page: PageView) -> Bool {
+        if let decided, PageView.same(decided.event, event) {
+            Self.log.notice("Escape asked again, \(decided.passes ? "let go" : "kept", privacy: .public) as before")
+            return decided.passes
+        }
+        let passes = decide(event, to: page)
+        decided = (event, passes)
+        return passes
+    }
+
+    private func decide(_ event: NSEvent, to page: PageView) -> Bool {
         guard let window = event.window else { return true }
         let now = event.timestamp
         let waiting = self.window === window && self.page === page && now < deadline
@@ -79,6 +109,7 @@ final class FullScreenEscape {
             if heldKept { keepKeyUp() }
             return false
         }
+        Self.log.notice("Escape at \(now, privacy: .public), \(waiting ? "the second" : "a first", privacy: .public) press: wait until \(self.deadline, privacy: .public), same window \(self.window === window, privacy: .public), same page \(self.page === page, privacy: .public)")
         // On its way out already: there is nothing left to guard.
         if page.fullscreenState == .exitingFullscreen {
             disarm()
@@ -141,6 +172,7 @@ final class FullScreenEscape {
     /// the page is leaving full screen by itself. The reminder goes without
     /// a fade, from WebKit's window before that starts on its way out.
     private func disarm() {
+        Self.log.notice("Escape wait over at once")
         expiry?.cancel()
         expiry = nil
         window = nil
