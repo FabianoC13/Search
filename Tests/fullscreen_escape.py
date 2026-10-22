@@ -254,21 +254,33 @@ def run_twice(t, name, split):
         else:
             print(f"  --  {name}: the switcher didn't come up over the page here; not checked", up)
 
-    # Held down: never the second press, however long.
+    # Held down: never a second press, and no more time for one. Two
+    # seconds from the first press the count is back to nothing.
     esc()
     for _ in range(6):
         esc(held=True)
     s = state(); seen = saw(a)
-    t.ok(f"{name}: Escape held down past two seconds never reaches the page, and the reminder stays",
+    t.ok(f"{name}: Escape held down past two seconds never reaches the page, and the reminder goes with the time",
+         "keydown:Escape" not in seen and "keyup:Escape" not in seen and s["reminder"] is False, (seen, s))
+    esc(); s = state()
+    seen = saw(a)
+    t.ok(f"{name}: the press after letting go, past two seconds, is a first again",
          "keydown:Escape" not in seen and "keyup:Escape" not in seen and s["reminder"] is True, (seen, s))
     esc(); s = state()
     seen = saw(a)
-    t.ok(f"{name}: the press after letting go is the second", "keydown:Escape" in seen and s["reminder"] is False, (seen, s))
+    t.ok(f"{name}: a quick press after it is the second", "keydown:Escape" in seen and s["reminder"] is False, (seen, s))
     # That second press held down: its repeats are kept, and bring nothing up.
     esc(held=True); esc(held=True); s = state()
     seen = saw(a)
     t.ok(f"{name}: the second press held down reaches the page no more, with no reminder",
          "keydown:Escape" not in seen and s["reminder"] is False, (seen, s))
+
+    # Slow presses never add up: each, 2.3 s after the one before, is a first.
+    esc(); time.sleep(1.9); esc(); s = state()
+    seen = saw(a)
+    t.ok(f"{name}: two presses 2.3 s apart don't leave: the second is a first again",
+         "keydown:Escape" not in seen and s["reminder"] is True, (seen, s))
+    esc(); s = state(); saw(a)
 
     # The two seconds over: the next Escape is a first again.
     esc(); s = state()
