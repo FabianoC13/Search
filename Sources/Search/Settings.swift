@@ -360,7 +360,7 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.floatsAway)
             }
             Rule()
-            Line("Press Esc twice to leave full screen", "As in Arc: the first press shows a reminder and leaves the video as it is; a second within two seconds leaves its full screen. Holding Esc down counts as one press") {
+            Line("Press Esc twice to leave full screen", "As in Arc: the first press shows a reminder and leaves the video as it is; a second within two seconds leaves its full screen. Holding Escape down counts as one press") {
                 Switch(on: $prefs.escapeTwice)
             }
             Rule()
