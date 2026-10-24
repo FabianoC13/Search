@@ -23,6 +23,9 @@
     ./bench shot ID [PATH] [WIDTH]     a PNG of the page → its path
     ./bench close ID | all             only tabs the bench opened
     ./bench probe                      the window's own state: panels, modal, windows
+    ./bench engine                     which engine draws pages (webkit or chromium), the one chosen, why
+                                       Chromium fell back if it did, its DevTools port, and a count of every
+                                       WebKit object made — all nought in Chromium mode
     ./bench extensions                 installed extensions, loaded or not, with their warnings
     ./bench little URL|keep|close      a small window for a link (made unseen), kept into the row, or closed
     ./bench site PATH [security]       the site card for the tab on screen, drawn to a PNG
@@ -519,7 +522,7 @@ def main(argv):
     elif verb == "accounts":
         if len(args) not in (0, 1) or (args and not args[0].isdigit()): sys.exit("usage: bench accounts [ROW]")
         if args: request["pick"] = int(args[0])
-    elif verb not in ("tabs", "probe", "extensions", "import-preview", "quit"):
+    elif verb not in ("tabs", "probe", "extensions", "import-preview", "quit", "engine"):
         sys.exit(f"unknown command “{verb}” — see bench help")
 
     answer = ask(os.path.join(folder(world), "bench.sock"), request)
