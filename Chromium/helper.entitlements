@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Every one of Chromium's other processes runs from this one helper: told
+     where the helper is (browser_subprocess_path, which an add-on outside
+     the app needs), Chromium uses that path as it is and never its
+     "(Renderer)" and "(GPU)" variants (ChildProcessHost::GetChildPath). So
+     it carries what pages and the GPU process need: V8 and SwiftShader
+     compile code as they run, as in Chromium's own
+     helper-renderer-entitlements.plist and helper-gpu-entitlements.plist.
+     Plugins, which needed more, are gone from Chromium. -->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+</dict>
+</plist>
