@@ -251,7 +251,7 @@ struct SiteCard: View {
     /// Only on a site they would float from, with one of Settings › General's
     /// Float the video switches on, and not in a private tab.
     @ViewBuilder private var grounded: some View {
-        if !tab.shy, browser.prefs.floatsOnLeave || browser.prefs.floatsAway,
+        if WebEngine.isWebKit, !tab.shy, browser.prefs.floatsOnLeave || browser.prefs.floatsAway,
            let url = tab.pageAddress, ["http", "https"].contains(url.scheme?.lowercased()),
            Players.knows(url), let host = url.host() {
             Ground(host: host)
@@ -261,8 +261,9 @@ struct SiteCard: View {
     /// Whether the site may play sound by itself (see Autoplay), a switch at
     /// the end of its line. Not in a private tab, which remembers nothing,
     /// nor with Settings › Videos wait for a click on, which lets no site.
+    /// WebKit's: it is told as each page loads (see Autoplay).
     @ViewBuilder private var sound: some View {
-        if !tab.shy, !Store.settings.bool(forKey: Preferences.waitsKey),
+        if WebEngine.isWebKit, !tab.shy, !Store.settings.bool(forKey: Preferences.waitsKey),
            let url = tab.pageAddress, ["http", "https"].contains(url.scheme?.lowercased()),
            let host = url.host() {
             Sound(host: host)

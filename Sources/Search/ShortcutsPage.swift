@@ -16,6 +16,7 @@ struct ShortcutsPage: View {
         // Split View's commands only once it is on.
         if Command.split.contains(command.id), !browser.prefs.splitView { return false }
         if Command.ai.contains(command.id), !browser.prefs.ai { return false }
+        if Command.webKitOnly.contains(command.id), !WebEngine.isWebKit { return false }
         let words = hunt.trimmingCharacters(in: .whitespaces)
         guard !words.isEmpty else { return true }
         let key = store.key(for: command.id)?.display ?? ""
@@ -50,7 +51,7 @@ struct ShortcutsPage: View {
                 }
                 }
             }
-            if #available(macOS 15.4, *) { extensionCommands }
+            if #available(macOS 15.4, *), WebEngine.isWebKit { extensionCommands }
             if store.anyChanged, hunt.isEmpty {
                 Pill("Reset All to Defaults") { store.resetAll() }
             }

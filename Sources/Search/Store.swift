@@ -48,6 +48,7 @@ enum Store {
     /// between probes the way the real one does. Wiping the test store is
     /// then as safe as wiping its folder.
     static var websites: WKWebsiteDataStore {
+        Census.stores += 1
         guard testing, !ownContainer else { return .default() }
         return WKWebsiteDataStore(forIdentifier: probeStore(1))
     }
@@ -63,7 +64,8 @@ enum Store {
     /// touched.
     @MainActor static var keepsSignIns = false {
         didSet {
-            guard keepsSignIns != oldValue else { return }
+            // Read at launch in either mode; only WebKit has stores to tell.
+            guard keepsSignIns != oldValue, WebEngine.isWebKit else { return }
             Spaces.everyStore.forEach(followSignIns)
         }
     }

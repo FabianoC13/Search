@@ -141,6 +141,15 @@ final class Favicons {
         guard !busy.contains(host), changed || !missing.contains(host) else { return }
         busy.insert(host)
 
+        // A Chromium page can't be asked: it names its icons itself as they
+        // change (Tab.favicons), and those are what is ranked and fetched.
+        guard WebEngine.isWebKit else {
+            let declared = tab.favicons.map { ["href": $0.absoluteString, "rel": "icon"] }
+            let candidates = Favicons.rank(declared, page: url, dark: dark)
+            let shy = tab.shy
+            Task { await download(candidates, host: host, key: key, shy: shy) }
+            return
+        }
         tab.web.evaluateJavaScript(Favicons.probe) { [weak self, weak tab] answer, _ in
             MainActor.assumeIsolated {
                 guard let self else { return }

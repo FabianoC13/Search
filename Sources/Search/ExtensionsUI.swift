@@ -233,7 +233,8 @@ struct StoreOffer: View {
     @ObservedObject var browser: Browser
 
     var body: some View {
-        if #available(macOS 15.4, *), let tab = browser.active {
+        // Extensions are WebKit's: none offered in Chromium mode.
+        if #available(macOS 15.4, *), WebEngine.isWebKit, let tab = browser.active {
             Watch(tab: tab, extensions: .shared)
         }
     }

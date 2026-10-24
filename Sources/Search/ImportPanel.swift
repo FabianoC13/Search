@@ -346,7 +346,8 @@ struct ImportPanel: View {
 
     /// The store extensions it has that aren't here already.
     private func fresh(_ source: ImportSource) -> [String] {
-        guard #available(macOS 15.4, *), let preview = previews[key(source, profile(of: source))] else { return [] }
+        // Extensions are WebKit's: none brought over in Chromium mode.
+        guard #available(macOS 15.4, *), WebEngine.isWebKit, let preview = previews[key(source, profile(of: source))] else { return [] }
         let have = Set(Extensions.shared.installed.map(\.id))
         return preview.extensions.filter { !have.contains($0) }
     }
@@ -444,7 +445,7 @@ struct ImportPanel: View {
                 group.leave()
             }
         }
-        if #available(macOS 15.4, *), !extensions.isEmpty {
+        if #available(macOS 15.4, *), WebEngine.isWebKit, !extensions.isEmpty {
             // Each from the store, fresh and checked, one question at a time.
             Task { for id in extensions { await Extensions.shared.install(id: id) } }
             said[3] = Said(ok: true, text: extensions.count == 1 ? "1 extension to confirm" : "\(extensions.count) extensions to confirm")

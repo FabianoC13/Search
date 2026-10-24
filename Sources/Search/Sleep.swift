@@ -69,6 +69,10 @@ extension Browser {
         if tab.bench { return "a bench tab" }
         if tab.isBlank { return "blank" }
         if tab.asleep { return "already asleep" }
+        // Asleep, a page keeps only what it typed and didn't send by being
+        // asked first (see unsaved), and a Chromium page can't answer. Its
+        // tab stays awake rather than lose that on a guess.
+        guard WebEngine.isWebKit else { return "drawn by Chromium" }
         guard let web = tab.built else { return "no page" }
         if tab.loading { return "still loading" }
         if tab.noisy { return "playing sound" }

@@ -152,6 +152,7 @@ final class Extensions: NSObject, ObservableObject {
     }
 
     private override init() {
+        Census.extensions += 1
         WKWebExtension.MatchPattern.registerCustomURLScheme(Extensions.scheme)
         // A test run keeps its extensions' storage apart, as it does its
         // cookies and passwords.
@@ -1684,7 +1685,9 @@ struct ExtensionSlot: View {
     var room: Int? = nil
 
     var body: some View {
-        if #available(macOS 15.4, *) {
+        // Nothing to show in Chromium mode, and nothing of WebKit's made to
+        // find that out.
+        if #available(macOS 15.4, *), WebEngine.isWebKit {
             ExtensionButtons(extensions: .shared, edge: edge, room: room)
         }
     }

@@ -202,7 +202,7 @@ struct Fold: View {
     /// on the way to a bookmark over the page included (#88).
     private var holding: Bool {
         if browser.bookmarksOpen { return true }
-        if #available(macOS 15.4, *), Extensions.shared.menuOpen { return true }
+        if #available(macOS 15.4, *), WebEngine.isWebKit, Extensions.shared.menuOpen { return true }
         return false
     }
 
