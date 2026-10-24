@@ -302,8 +302,19 @@ static void page_create(chromium_page *page) {
     glue_set(&url, page->url);
 
     cef_request_context_t *context = context_take(page->context);
+    int global = !page->context || page->context->global;
     context_let_go(page->context);
     page->context = NULL;
+    if (!context && !global) {
+        // No context of its own: never the global one instead, which would
+        // put a private tab's cookies with everybody's.
+        cef_string_utf16_clear(&url);
+        page->state = CLOSED;
+        glue_later(^{
+            page_end(page);
+        });
+        return;
+    }
     page->state = MAKING;
     making++;
     // Both references go to Chromium, whether it makes the browser or not.

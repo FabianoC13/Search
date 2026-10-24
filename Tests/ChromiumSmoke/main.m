@@ -19,8 +19,10 @@
 #include "CChromium.h"
 
 static chromium_page *page;
+static NSWindow *window;
 static int port, finished, failures;
 static double hold = 1.0;
+static int inspect;
 static NSString *root;
 
 static void say(const char *format, ...) {
@@ -88,8 +90,18 @@ static void close_page(void) {
     chromium_page_close(page);
 }
 
+/// Chromium's view inside the window's: there, and filling it.
+static void views(const char *when) {
+    NSView *container = window.contentView;
+    for (NSView *view in container.subviews) {
+        say("%s: %s %s in %s", when, NSStringFromClass(view.class).UTF8String, NSStringFromRect(view.frame).UTF8String,
+            NSStringFromRect(container.bounds).UTF8String);
+    }
+}
+
 static void on_created(void *context) {
     say("created");
+    views("view");
 }
 
 static void on_title(void *context, const char *title) {
@@ -123,7 +135,15 @@ static void on_failed(void *context, int code, const char *text, const char *url
 static void on_finished(void *context, int status) {
     say("load end: %d", status);
     if (finished++) return;
+    [window setContentSize:NSMakeSize(1200, 800)];
+    views("view after resizing");
     say("zoom level: %.2f", chromium_page_zoom(page));
+    if (inspect) {
+        chromium_page_inspect(page);
+        later(2, ^{
+            say("open with DevTools: %d", chromium_open());
+        });
+    }
     later(hold, ^{
         children("while the page is open");
         if (!port) {
@@ -171,6 +191,7 @@ int main(int argc, const char *argv[]) {
             if (!strcmp(argv[i], "--port")) port = value.intValue;
             if (!strcmp(argv[i], "--url")) url = value;
             if (!strcmp(argv[i], "--hold")) hold = value.doubleValue;
+            if (!strcmp(argv[i], "--inspect")) inspect = value.intValue;
         }
         NSString *version = [NSString stringWithUTF8String:chromium_pinned_version()];
         if (!addon) {
@@ -190,7 +211,7 @@ int main(int argc, const char *argv[]) {
 
         NSApplication *app = [NSApplication sharedApplication];
         [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
-        NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(200, 200, 1024, 720)
+        window = [[NSWindow alloc] initWithContentRect:NSMakeRect(200, 200, 1024, 720)
                                                        styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskResizable
                                                          backing:NSBackingStoreBuffered
                                                            defer:NO];
