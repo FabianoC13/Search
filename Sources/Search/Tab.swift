@@ -1518,6 +1518,9 @@ extension Tab: PageEventSink {
             Tab.chromiumUp = true
             Store.settings.removeObject(forKey: WebEngine.startingKey)
         }
+        // The icons named were the last document's: another site's, it may
+        // be, and not to be fetched and kept as this one's.
+        favicons = []
         host?.tabCommitted(self)
     }
 

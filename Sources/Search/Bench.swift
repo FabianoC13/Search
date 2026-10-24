@@ -3004,7 +3004,7 @@ final class Bench {
             "group": browser?.group(of: tab).flatMap { id in browser?.tabGroups.first { $0.id == id }?.name } ?? "",
             "loading": tab.loading,
             "hollow": tab.hollow,
-            "view": tab.built?.url?.absoluteString ?? "",
+            "view": tab.page?.url?.absoluteString ?? "",
             "bench": tab.bench,
             "active": tab.id == browser?.activeID,
             "asleep": tab.asleep,
