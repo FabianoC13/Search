@@ -343,7 +343,7 @@ final class Browser: NSObject, ObservableObject {
     var settingsPage: SettingsPanel.Page {
         get {
             let page = SettingsPanel.Page(rawValue: Store.settings.string(forKey: "settings.page") ?? "") ?? .general
-            return page == .ai && !AI.shipped ? .general : page
+            return SettingsPanel.Page.offered.contains(page) ? page : .general
         }
         set { Store.settings.set(newValue.rawValue, forKey: "settings.page") }
     }

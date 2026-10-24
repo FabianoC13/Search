@@ -38,7 +38,11 @@ struct EngineSettings: View {
                     }
                 }
                 Rule()
-                Line("What Chromium leaves out", "Extensions, passkeys, saving and filling passwords, hiding things on a page, the ad blocker, reading mode, the floating video, AI, find on the page and site notifications are WebKit's for now. Each engine keeps its own sign-ins: switching means signing in again") {
+                Line("What Chromium leaves out", "For now: extensions, saving and filling passwords, passkeys, hiding things, the ad blocker, reading mode, the floating video, AI, find on the page and site notifications") {
+                    EmptyView()
+                }
+                Rule()
+                Line("Sign-ins", "Each engine keeps its own: switching means signing in to sites again. Tabs, history, bookmarks and passwords are the same in both") {
                     EmptyView()
                 }
             }

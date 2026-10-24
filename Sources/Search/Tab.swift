@@ -300,6 +300,11 @@ final class Tab: ObservableObject, Identifiable {
     /// The icons the page names, as Chromium reports them, for Favicons:
     /// a Chromium page can't be asked the way WebKit's is.
     private(set) var favicons: [URL] = []
+
+    /// Where a download from this tab's page lands, for a Chromium page to
+    /// ask (it is handed the tab as its PageEventSink): the folder of the
+    /// window's space, or the one in Settings, as WebKit's downloads go.
+    var downloadsFolder: URL { host?.downloadsFolder ?? Shared.prefs.downloads }
     /// Whoever handles navigation and windows for this page; applied when
     /// the page is built, whenever that is.
     weak var delegate: (WKNavigationDelegate & WKUIDelegate)? {
@@ -1486,6 +1491,8 @@ protocol TabHost: AnyObject {
     func tabDownloaded(_ tab: Tab, file: URL, from source: URL?)
     /// The space the tab is in, for the profile its next page signs in with.
     func space(of tab: Tab) -> UUID
+    /// Where the window's downloads land: its space's folder, or Settings'.
+    var downloadsFolder: URL { get }
 }
 
 // What a Chromium page reports, taken in the way WebKit's observers take

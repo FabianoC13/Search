@@ -307,7 +307,7 @@ struct SearchApp: App {
                     if WebEngine.ready(other) {
                         WebEngine.relaunch(into: other)
                     } else {
-                        Store.settings.set(SettingsPanel.Page.engine.rawValue, forKey: "settings.page")
+                        browser.settingsPage = .engine
                         browser.tuning = true
                     }
                 }
