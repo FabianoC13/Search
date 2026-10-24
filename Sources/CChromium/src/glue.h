@@ -80,6 +80,10 @@ int glue_before_download(struct _cef_download_handler_t *self, cef_browser_t *br
 void glue_pages_ready(void);
 void glue_pages_stop(void);
 int glue_pages_making(void);
+/// Writes every profile's cookies to disk; flushing() counts those not
+/// done yet.
+void glue_contexts_flush(void);
+int glue_contexts_flushing(void);
 void glue_contexts_stop(void);
 
 #endif

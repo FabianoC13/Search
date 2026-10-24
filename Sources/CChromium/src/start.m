@@ -520,6 +520,16 @@ void chromium_stop(double timeout) {
             CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.005, true);
         }
     }
+    // Then the cookies, all of them on disk before the network service
+    // goes: a second at most.
+    glue_contexts_flush();
+    deadline = CFAbsoluteTimeGetCurrent() + 1;
+    while (glue_contexts_flushing() > 0 && CFAbsoluteTimeGetCurrent() < deadline) {
+        @autoreleasepool {
+            pump_perform();
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.005, true);
+        }
+    }
     pump_stop();
     glue_contexts_stop();
     // What closing let go of is released on Chromium's side in its next

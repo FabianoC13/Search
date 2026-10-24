@@ -17,6 +17,8 @@
 
 #include "glue.h"
 #include "include/capi/cef_audio_handler_capi.h"
+#include "include/capi/cef_callback_capi.h"
+#include "include/capi/cef_cookie_capi.h"
 #include "include/capi/cef_focus_handler_capi.h"
 #include "include/capi/cef_load_handler_capi.h"
 #include "include/capi/cef_navigation_entry_capi.h"
@@ -92,6 +94,38 @@ static cef_request_context_t *context_take(struct chromium_context *context) {
     return context->context;
 }
 
+// Cookies are written to disk a while after they change; on the way out
+// they are written at once, or a sign-in made just before quitting is lost.
+static cef_completion_callback_t flushed;
+static int flushing;
+
+static void CEF_CALLBACK flush_done(cef_completion_callback_t *self) {
+    flushing--;
+}
+
+static void flush(struct chromium_context *context) {
+    if (!context->context || context->dead) return;
+    cef_cookie_manager_t *cookies = context->context->get_cookie_manager(context->context, NULL);
+    if (!cookies) return;
+    flushing++;
+    GLUE_ADD_REF(&flushed);
+    if (!cookies->flush_store(cookies, &flushed)) flushing--;
+    GLUE_RELEASE(cookies);
+}
+
+void glue_contexts_flush(void) {
+    glue_forever(&flushed.base, sizeof flushed);
+    flushed.on_complete = flush_done;
+    flush(&global);
+    for (struct chromium_context *context = contexts; context; context = context->next) {
+        if (context->cache && context->cache[0]) flush(context);
+    }
+}
+
+int glue_contexts_flushing(void) {
+    return flushing;
+}
+
 void glue_contexts_stop(void) {
     GLUE_RELEASE(global.context);
     global.context = NULL;
@@ -137,6 +171,8 @@ struct chromium_page {
     /// do_close has been and gone; only the view is left to take away.
     int doomed;
     int ended, audible;
+    /// The main frame's address as last told, so it is told once.
+    char *address;
 
     // What waits for the browser.
     char *open;
@@ -157,6 +193,7 @@ static void dress(chromium_page *page);
 
 static void page_free(chromium_page *page) {
     free(page->url);
+    free(page->address);
     free(page->open);
     for (struct script *script = page->scripts, *next; script; script = next) {
         next = script->next;
@@ -330,11 +367,12 @@ static void run_script(chromium_page *page, const char *code) {
 static void show_inspector(chromium_page *page) {
     cef_browser_host_t *host = page_host(page);
     if (!host) return;
-    // A window of its own, Chromium's.
+    // A window of its own, Chromium's. Chrome's style, which is what
+    // DevTools has to be: asked for Alloy's, Chromium refuses and falls back.
     cef_window_info_t window = {0};
     window.size = sizeof window;
     window.bounds = (cef_rect_t){120, 120, 1100, 760};
-    window.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+    window.runtime_style = CEF_RUNTIME_STYLE_DEFAULT;
     cef_browser_settings_t settings = {0};
     settings.size = sizeof settings;
     cef_client_t *client = glue_loose_client();
@@ -753,14 +791,22 @@ static void CEF_CALLBACK before_close(cef_life_span_handler_t *self, cef_browser
 
 // MARK: Display
 
+/// Takes `text`. Told when it changes only: it comes both from here and
+/// with each new document.
+static void tell_address(chromium_page *page, char *text) {
+    if (!text[0] || (page->address && strcmp(page->address, text) == 0)) {
+        free(text);
+        return;
+    }
+    free(page->address);
+    page->address = text;
+    EMIT(page, address, text);
+}
+
 static void CEF_CALLBACK address_change(cef_display_handler_t *self, cef_browser_t *browser, cef_frame_t *frame,
                                         const cef_string_t *url) {
     chromium_page *page = PAGE_OF(self, display);
-    if (is_main(frame)) {
-        char *text = glue_utf8(url);
-        EMIT(page, address, text);
-        free(text);
-    }
+    if (is_main(frame)) tell_address(page, glue_utf8(url));
     GLUE_RELEASE(frame);
     GLUE_RELEASE(browser);
 }
@@ -832,6 +878,9 @@ static void CEF_CALLBACK load_start(cef_load_handler_t *self, cef_browser_t *bro
     chromium_page *page = PAGE_OF(self, load);
     if (is_main(frame)) {
         quiet(page);
+        // A page brought back from the back-forward cache says where it
+        // is only after it has finished loading; the tab hears it first.
+        tell_address(page, glue_take(frame->get_url(frame)));
         EMIT(page, committed);
     }
     GLUE_RELEASE(frame);
