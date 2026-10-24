@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "include/cef_api_hash.h"
+#include "include/cef_version.h"
 #include "include/cef_version_info.h"
 #include "include/capi/cef_app_capi.h"
 #include "include/capi/cef_browser_capi.h"
@@ -20,6 +21,8 @@
 #include "include/internal/cef_string_list.h"
 
 #include "CChromium.h"
+
+int chromium_loaded(void);
 
 // Each function Search calls: its return type, name, parameters and the
 // arguments to pass them on.
@@ -104,8 +107,16 @@ int chromium_load(const char *binary, char *error, size_t size) {
     return 1;
 }
 
+int chromium_loaded(void) {
+    return library != NULL;
+}
+
 const char *chromium_version(void) {
     return library ? p_cef_version_full() : "";
+}
+
+const char *chromium_pinned_version(void) {
+    return CEF_VERSION;
 }
 
 // CEF's own names, passed on.
