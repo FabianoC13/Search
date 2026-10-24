@@ -44,6 +44,16 @@ final class ChromiumAddon: ObservableObject {
         case failed(String)
     }
 
+    /// What the update feed offers: json["chromium"] in appcast.json, read
+    /// by Updater, which checks the address the same way as the AI engine's.
+    struct Offer: Equatable {
+        let version: String
+        let url: URL
+        let sha256: String
+        let size: Int64
+    }
+    var offered: Offer?
+
     @Published private(set) var state: State = .absent
     /// The download's size in bytes when the feed offers one.
     var size: Int64? { nil }
