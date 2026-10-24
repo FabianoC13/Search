@@ -167,20 +167,21 @@ extension Browser {
 
     /// The page's "Add to Search" was pressed: the extension this tab is showing.
     func addFromStore(_ tab: Tab) {
-        guard #available(macOS 15.4, *), let url = tab.address, let id = Crx.storeID(of: url) else { return }
+        guard #available(macOS 15.4, *), WebEngine.isWebKit, let url = tab.address, let id = Crx.storeID(of: url) else { return }
         Extensions.shared.install(from: id)
     }
 
     /// Tells a store page what is installed and what is on its way, so its
     /// button can say "Added to Search" or "Adding…".
     func tellStore(_ tab: Tab) {
-        guard #available(macOS 15.4, *), let url = tab.address, StoreOffer.isStorePage(url) else { return }
+        // Extensions are WebKit's: a store page in Chromium mode is only a page.
+        guard #available(macOS 15.4, *), WebEngine.isWebKit, let url = tab.address, StoreOffer.isStorePage(url) else { return }
         tab.tellStore(installed: Extensions.shared.installed.map(\.id), busy: Extensions.shared.busy)
     }
 
     /// And tells every store page again whenever either changes.
     func followStore() {
-        guard #available(macOS 15.4, *) else { return }
+        guard #available(macOS 15.4, *), WebEngine.isWebKit else { return }
         let extensions = Extensions.shared
         storeWatch = extensions.$installed.map { _ in () }
             .merge(with: extensions.$busy.map { _ in () })

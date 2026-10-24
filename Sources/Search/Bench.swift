@@ -297,7 +297,50 @@ final class Bench {
             }
         }
 
+        // What only a WebKit page can do — hand back a script's answer, draw
+        // itself into a picture, take keys as WebKit takes them — or only
+        // WebKit has, its extensions and its find. In Chromium mode there is
+        // no WebKit page to ask, and none is made to answer: Playwright drives
+        // Chromium instead, over its DevTools port.
+        if !WebEngine.isWebKit, Bench.webKitOnly.contains(verb) || verb.hasPrefix("ext-") {
+            let port = ChromiumRuntime.debuggingPort
+            answer(["error": "“\(verb)” needs WebKit, and this run draws pages with Chromium"
+                + (port > 0 ? " — drive it with Playwright, chromium.connectOverCDP on 127.0.0.1:\(port)" : ""),
+                    "engine": WebEngine.current.rawValue])
+            return
+        }
+
         switch verb {
+        case "engine":
+            // Which engine this process runs, and what of WebKit's it made:
+            // in Chromium mode every count is nought, and that is the check.
+            answer([
+                "engine": WebEngine.current.rawValue,
+                "chosen": WebEngine.chosen.rawValue,
+                "fallback": WebEngine.fallback ?? "",
+                "debuggingPort": ChromiumRuntime.debuggingPort,
+                "addon": Bench.describe(ChromiumAddon.shared.state),
+                "addonVersion": ChromiumAddon.shared.version ?? "",
+                "pages": (browser.tabs + browser.parkedTabs).filter { $0.page != nil }.count,
+                "census": Census.counts,
+                "untouched": Census.untouched,
+            ])
+
+        case "nav":
+            // Back, Forward, Reload or Stop on a tab, as the buttons do them:
+            // through the tab to its page, whichever engine draws it.
+            guard let tab = find(request, in: browser) else { answer(missing(request)); return }
+            switch request["action"] as? String ?? "" {
+            case "back": tab.back()
+            case "forward": tab.forward()
+            case "reload": tab.reload()
+            case "stop": tab.stop()
+            default:
+                answer(["error": "nav needs back, forward, reload or stop"])
+                return
+            }
+            answer(describe(tab))
+
         case "tabs":
             // A private tab is nobody's business but yours: a test run has none
             // of yours, so there every tab is listed.
@@ -1228,7 +1271,7 @@ final class Bench {
                 menus[item.title] = menu.items.filter { !$0.isSeparatorItem && !$0.isHidden }.map(\.title)
             }
             answer(["menus": menus, "ai": browser.prefs.ai, "shipped": AI.shipped,
-                    "settingsPages": SettingsPanel.Page.allCases.filter { $0 != .ai || AI.shipped }.map(\.rawValue),
+                    "settingsPages": SettingsPanel.Page.offered.map(\.rawValue),
                     "settingsPage": browser.settingsPage.rawValue])
 
         case "menu":
@@ -2347,6 +2390,11 @@ final class Bench {
                 "swipe": Double(browser.spaceSwipe),
                 "pages": Web.pages.allObjects.map { $0.configuration.websiteDataStore.identifier?.uuidString ?? "default" },
             ]
+            // WebKit's stores are WebKit's to list: Chromium mode makes none.
+            guard WebEngine.isWebKit else {
+                answer(out)
+                return
+            }
             // And the stores WebKit keeps by identifier, a moment later —
             // what a deleted space should have taken with it.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -2376,7 +2424,10 @@ final class Bench {
 
         case "ui":
             // Open or close the app's own panels, to reproduce what a person
-            // did without a person.
+            // did without a person. `page`: the Settings page it opens on.
+            if let page = (request["page"] as? String).flatMap(SettingsPanel.Page.init(rawValue:)) {
+                browser.settingsPage = page
+            }
             if let on = request["settings"] as? Bool { browser.tuning = on }
             if let on = request["passwords"] as? Bool, Store.testing { browser.managing = on }
             if let on = request["welcome"] as? Bool { browser.welcoming = on }
@@ -2421,7 +2472,7 @@ final class Bench {
                 browser.tabDraft = text
             }
             if request["finishedit"] as? Bool == true { browser.finishTabEdit() }
-            if #available(macOS 15.4, *), let on = request["extensions"] as? Bool { Extensions.shared.menuOpen = on }
+            if #available(macOS 15.4, *), WebEngine.isWebKit, let on = request["extensions"] as? Bool { Extensions.shared.menuOpen = on }
             answer(["ok": true])
 
         case "extensions", "ext-add", "ext-folder", "ext-press", "ext-remove", "ext-reload", "ext-page", "ext-popup", "ext-menu", "ext-pin", "ext-shot", "ext-answer", "ext-enable", "capture", "capture-stop":
@@ -2433,7 +2484,7 @@ final class Bench {
 
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
-                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "float", "window", "pages", "picture", "place", "group", "tospace", "field", "bookmark", "menu", "keyeq", "fill", "pin", "middle", "windows", "quit", "towindow", "news", "pull", "space", "split", "strip", "column", "fold", "consent", "update", "site", "little", "ui", "import", "import-preview", "import-file", "import-file-start", "import-file-status", "import-file-cancel", "remove-folder", "accounts", "find", "answer", "visible", "ai", "notifications",
+                "engine", "nav", "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "float", "window", "pages", "picture", "place", "group", "tospace", "field", "bookmark", "menu", "keyeq", "fill", "pin", "middle", "windows", "quit", "towindow", "news", "pull", "space", "split", "strip", "column", "fold", "consent", "update", "site", "little", "ui", "import", "import-preview", "import-file", "import-file-start", "import-file-status", "import-file-cancel", "remove-folder", "accounts", "find", "answer", "visible", "ai", "notifications",
             ]])
         }
     }
@@ -2953,7 +3004,7 @@ final class Bench {
             "group": browser?.group(of: tab).flatMap { id in browser?.tabGroups.first { $0.id == id }?.name } ?? "",
             "loading": tab.loading,
             "hollow": tab.hollow,
-            "view": tab.built?.url?.absoluteString ?? "",
+            "view": tab.page?.url?.absoluteString ?? "",
             "bench": tab.bench,
             "active": tab.id == browser?.activeID,
             "asleep": tab.asleep,
@@ -3079,11 +3130,36 @@ final class Bench {
     /// The stage takes it back the moment you pick its tab, and it comes
     /// here again when the bench next needs it.
     private func house(_ tab: Tab) {
-        guard tab.bench, tab.web.window == nil else { return }
+        // The page's view, whichever engine's: WebKit's built here as it
+        // always was, Chromium's made already by the load that opened it.
+        guard tab.bench else { return }
+        let view = tab.live.view
+        guard view.window == nil else { return }
         let window = room ?? makeRoom()
-        tab.web.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
-        tab.web.autoresizingMask = [.width, .height]
-        window.contentView?.addSubview(tab.web)
+        view.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+        view.autoresizingMask = [.width, .height]
+        window.contentView?.addSubview(view)
+    }
+
+    /// The commands only WebKit can answer (see the refusal in handle).
+    /// Not `picture`: it draws the window, and pictures only the WebKit
+    /// pages it finds there — none in Chromium mode, where the chrome is
+    /// still worth a picture.
+    static let webKitOnly: Set<String> = [
+        "text", "eval", "tap", "click", "type", "submit", "middle", "linkmenu", "key", "shot",
+        "film", "float", "find", "ai", "extensions", "capture", "capture-stop",
+    ]
+
+    /// Chromium's add-on as a word or two, for `engine`.
+    static func describe(_ state: ChromiumAddon.State) -> String {
+        switch state {
+        case .absent: return "absent"
+        case .unavailable: return "unavailable"
+        case .downloading(let done): return "downloading \(Int(done * 100))%"
+        case .installing: return "installing"
+        case .ready: return "ready"
+        case .failed(let why): return "failed: \(why)"
+        }
     }
 
     /// The last page `ai read` read, for `ai check`.

@@ -71,19 +71,24 @@ enum Web {
     /// starting, the window stuck meanwhile. Sharing one lets WebKit have
     /// the next process ready: 9 to 10 ms, for the same memory and the same
     /// number of processes (measured with ./bench bookmark URL new, 24 Sep 2026).
-    static let pool = WKProcessPool()
+    static let pool: WKProcessPool = {
+        Census.pools += 1
+        return WKProcessPool()
+    }()
 
     /// `space`: the space the tab belongs to, when it is not the one on
     /// screen — a parked row made ahead of time (see Spaces.swift).
     /// `store`: a shy tab's own, for one opened from it — a link followed
     /// out of a private page is still signed in to whatever that page was.
     static func configuration(shy: Bool = false, space: UUID? = nil, store: WKWebsiteDataStore? = nil) -> WKWebViewConfiguration {
+        Census.configurations += 1
         let config = WKWebViewConfiguration()
         // The real store, not the ephemeral one: staying signed in between
         // launches is the difference between a browser and a preview pane. A
         // shy tab gets its own store, which exists only while it does — its own
         // cookies, its own sign-ins, and nothing left behind when it closes.
         // With spaces on, each space's tabs share a store of that space's.
+        if store == nil, shy { Census.stores += 1 }
         config.websiteDataStore = store ?? (shy ? .nonPersistent() : MainActor.assumeIsolated { Spaces.store(for: space ?? Spaces.current) })
         // Web notifications go through the store (see Notifications.swift);
         // a private tab's is left without, and a page there is refused.
@@ -231,28 +236,75 @@ struct ReadingFill: View {
 final class Tab: ObservableObject, Identifiable {
     let id = UUID()
 
-    /// The page. Built the first time anyone asks for it, not when the tab
-    /// is — a session of twenty tabs coming back is twenty objects, not
-    /// twenty web views and their processes fighting the first frame.
+    /// The page, whichever engine draws it (see PageEngine.swift). Built the
+    /// first time anyone asks for it, not when the tab is — a session of
+    /// twenty tabs coming back is twenty objects, not twenty pages and their
+    /// processes fighting the first frame.
+    private(set) var page: (any PageEngine)?
+
+    /// The page, built now if there is none yet: WebKit's view, or a page of
+    /// Chromium's signed in where this tab's space or privacy says.
+    var live: any PageEngine {
+        if let page { return page }
+        if WebEngine.current == .chromium { return chromium(nil) }
+        return web
+    }
+
+    /// WebKit's view, built now if there is none yet — for what only WebKit
+    /// can do. Never asked in Chromium mode, where building one would start
+    /// the very processes that mode promises not to: a call that slips
+    /// through stops here rather than quietly costing a WebKit.
     var web: PageView {
+        precondition(WebEngine.current == .webkit, "A WebKit view was asked for in Chromium mode")
         if let built { return built }
         let view = build()
-        built = view
+        page = view
         return view
     }
+
     /// The web view if there is one yet, for the callers that must not be
-    /// the reason there is.
-    private(set) var built: PageView?
-    private var configuration: WKWebViewConfiguration
+    /// the reason there is. Always nil in Chromium mode, so everything that
+    /// reaches into WebKit through it does nothing there.
+    var built: PageView? { page as? PageView }
+
+    /// Made with the tab in WebKit mode, as it always was; never made at all
+    /// in Chromium mode (see init).
+    private var configuration: WKWebViewConfiguration?
     let extensionReturn = ExtensionReturnNavigation()
 
     /// Whether its page was made with the extension controller in it — every
     /// ordinary tab, and a private one only when extensions were allowed
     /// there as it was made (a controller can't be added to a page later).
     @available(macOS 15.4, *)
-    var carriesExtensions: Bool { configuration.webExtensionController != nil }
-    /// Where its cookies and sign-ins are kept.
-    var store: WKWebsiteDataStore { configuration.websiteDataStore }
+    var carriesExtensions: Bool { configuration?.webExtensionController != nil }
+    /// Where its cookies and sign-ins are kept. Nil in Chromium mode, whose
+    /// pages keep theirs in a profile (see `profile`).
+    var store: WKWebsiteDataStore? { configuration?.websiteDataStore }
+
+    /// The profile its Chromium page was made with, for as long as it has
+    /// one: what Move to Space compares, as WebKit mode compares stores.
+    private(set) var profile: ChromiumProfile?
+
+    /// A private tab's in-memory profile in Chromium mode. Private tabs
+    /// opened from one another are kin and share it, as WebKit's share the
+    /// private tab's store: a link followed out of a private page is still
+    /// signed in to whatever that page was.
+    var kin = UUID()
+
+    /// Told what a Chromium page reports that is the window's business:
+    /// commits, loads finished and failed, new tabs, closing, crashes,
+    /// downloads (see Browser's TabHost). WebKit's pages tell the browser
+    /// through its delegates instead.
+    weak var host: TabHost?
+
+    /// The icons the page names, as Chromium reports them, for Favicons:
+    /// a Chromium page can't be asked the way WebKit's is.
+    private(set) var favicons: [URL] = []
+
+    /// Where a download from this tab's page lands, for a Chromium page to
+    /// ask (it is handed the tab as its PageEventSink): the folder of the
+    /// window's space, or the one in Settings, as WebKit's downloads go.
+    var downloadsFolder: URL { host?.downloadsFolder ?? Shared.prefs.downloads }
     /// Whoever handles navigation and windows for this page; applied when
     /// the page is built, whenever that is.
     weak var delegate: (WKNavigationDelegate & WKUIDelegate)? {
@@ -267,7 +319,7 @@ final class Tab: ObservableObject, Identifiable {
 
     private func uiDelegate(_ delegate: (WKNavigationDelegate & WKUIDelegate)?) -> WKUIDelegate? {
         guard #available(macOS 15.4, *), let pages = MainActor.assumeIsolated({ Extensions.pages }),
-              configuration.userContentController === pages else { return delegate }
+              configuration?.userContentController === pages else { return delegate }
         let made = pageDelegate as? ExtensionPageDelegate ?? ExtensionPageDelegate()
         made.next = delegate
         pageDelegate = made
@@ -290,9 +342,9 @@ final class Tab: ObservableObject, Identifiable {
         // A new document: whatever the old one waited for under its field
         // went with it.
         if let built { Passkeys.shared.forget(built) }
-        if let url = built?.url, url.absoluteString != "about:blank" { committed = url }
+        if let url = page?.url, url.absoluteString != "about:blank" { committed = url }
         // A page arrived after all: the address is its own again.
-        if held != nil, let url = built?.url, url.absoluteString != "about:blank" {
+        if held != nil, let url = page?.url, url.absoluteString != "about:blank" {
             held = nil
             address = url
         }
@@ -336,7 +388,8 @@ final class Tab: ObservableObject, Identifiable {
     /// restoring the HTML gives you a page that looks right and does nothing,
     /// because every listener the page had was thrown away with it.
     func toggleReader(_ done: @escaping (Bool) -> Void) {
-        guard !isBlank else {
+        // WebKit's alone: Chromium can't hand the script's answer back.
+        guard !isBlank, WebEngine.current == .webkit else {
             done(false)
             return
         }
@@ -410,8 +463,9 @@ final class Tab: ObservableObject, Identifiable {
         guard let host = address?.host() else { return }
         let kept = (Store.settings.object(forKey: "zoom." + host) as? Double).map { CGFloat($0) }
             ?? Tab.defaultZoom
-        guard abs(kept - web.pageZoom) > 0.004 else { return }
-        web.pageZoom = kept
+        let page = live
+        guard abs(kept - page.pageZoom) > 0.004 else { return }
+        page.pageZoom = kept
         zoom = kept
     }
 
@@ -441,7 +495,7 @@ final class Tab: ObservableObject, Identifiable {
     /// it when its page is built again.
     func toggleMute() {
         muted.toggle()
-        if let built { Muter.set(muted, on: built) }
+        page?.setMuted(muted)
     }
 
     /// What the page hands back when you point at something and click it.
@@ -577,16 +631,46 @@ final class Tab: ObservableObject, Identifiable {
         return "New Tab"
     }
 
-    init(shy: Bool = false, bench: Bool = false, configuration: WKWebViewConfiguration? = nil) {
+    /// `configuration` is asked for only in WebKit mode, when the tab is
+    /// made, as it always was: what every caller hands over reaches into
+    /// WebKit's stores and its extension controller, which Chromium mode
+    /// must never make.
+    init(shy: Bool = false, bench: Bool = false, configuration: @autoclosure () -> WKWebViewConfiguration? = nil) {
         self.shy = shy
         self.bench = bench
-        self.configuration = configuration ?? Web.configuration(shy: shy)
+        self.configuration = WebEngine.current == .webkit ? configuration() ?? Web.configuration(shy: shy) : nil
+    }
+
+    /// A page of Chromium's for this tab, loading `url` from the start when
+    /// there is one: signed in with its space's profile, or a private tab's
+    /// in-memory one.
+    private func chromium(_ url: URL?) -> any PageEngine {
+        let profile: ChromiumProfile = shy ? .ephemeral(kin) : Spaces.profile(for: host?.space(of: self) ?? Spaces.current)
+        let made = ChromiumPage(url: url, profile: profile, sink: self)
+        if muted { made.setMuted(true) }
+        page = made
+        self.profile = profile
+        return made
+    }
+
+    /// The page told to go to `url`: the one there is, or one built for it.
+    private func show(_ url: URL) {
+        if let page {
+            page.open(url)
+        } else if WebEngine.current == .chromium {
+            _ = chromium(url)
+        } else {
+            web.open(url)
+        }
     }
 
     private func build() -> PageView {
+        Census.pages += 1
         // Here rather than in Web.configuration: a tab's configuration is
         // made with the tab, often long before its page, and a site or an
         // extension can hand over one of its own.
+        let configuration = self.configuration ?? Web.configuration(shy: shy)
+        self.configuration = configuration
         FrameRate.apply(to: configuration.preferences)
         let web = PageView(frame: .zero, configuration: configuration)
         // The trackpad pinch is WebKit's own: it magnifies what is on screen
@@ -638,38 +722,19 @@ final class Tab: ObservableObject, Identifiable {
         controller.add(hovered, contentWorld: .defaultClient, name: HoveredLink.name)
         controller.add(middles, contentWorld: Web.world, name: MiddleRelay.name)
         Shield.shared.protect(controller)
-        built = web
+        page = web
         // A tab muted before it went to sleep wakes muted.
         if muted { Muter.set(true, on: web) }
         arm(hiding: veils)
 
         watch = [
             web.observe(\.title, options: [.new]) { [weak self] _, _ in
-                MainActor.assumeIsolated { self?.title = self?.built?.title ?? "" }
+                MainActor.assumeIsolated { self?.heard(title: self?.built?.title ?? "") }
             },
             web.observe(\.url, options: [.new]) { [weak self] _, _ in
                 MainActor.assumeIsolated {
                     guard let self, let fresh = self.built?.url else { return }
-                    // about:blank is never a destination. Putting a pinned tab
-                    // to sleep loads it deliberately to make WebKit give the
-                    // page back — and letting that overwrite the address is how
-                    // a pinned tab lost the only thing that could bring it
-                    // back, and vanished from the session altogether.
-                    guard fresh.absoluteString != "about:blank" else { return }
-                    if self.held != nil {
-                        if fresh == self.heldOver { return }
-                        self.held = nil
-                    }
-                    // By site, port included: localhost:3000 to localhost:5173
-                    // is another project, with another icon.
-                    let moved = Favicons.site(fresh) != self.address.flatMap(Favicons.site)
-                    self.address = fresh
-                    // Within the same origin — history.pushState, a fragment —
-                    // the page on screen is the one at the new address.
-                    if let now = self.committed, now.scheme == fresh.scheme, now.host() == fresh.host(), now.port == fresh.port {
-                        self.committed = fresh
-                    }
-                    if moved { self.adoptIcon() }
+                    self.heard(url: fresh)
                 }
             },
             web.observe(\.estimatedProgress, options: [.new]) { [weak self] _, _ in
@@ -697,24 +762,56 @@ final class Tab: ObservableObject, Identifiable {
         return web
     }
 
+    // What either engine says of its page, said once here: WebKit's
+    // observers above and Chromium's reports (PageEventSink, below) both
+    // come through these.
+
+    private func heard(title: String) {
+        self.title = title
+    }
+
+    private func heard(url fresh: URL) {
+        // about:blank is never a destination. Putting a pinned tab
+        // to sleep loads it deliberately to make WebKit give the
+        // page back — and letting that overwrite the address is how
+        // a pinned tab lost the only thing that could bring it
+        // back, and vanished from the session altogether.
+        guard fresh.absoluteString != "about:blank" else { return }
+        if held != nil {
+            if fresh == heldOver { return }
+            held = nil
+        }
+        // By site, port included: localhost:3000 to localhost:5173
+        // is another project, with another icon.
+        let moved = Favicons.site(fresh) != address.flatMap(Favicons.site)
+        address = fresh
+        // Within the same origin — history.pushState, a fragment —
+        // the page on screen is the one at the new address.
+        if let now = committed, now.scheme == fresh.scheme, now.host() == fresh.host(), now.port == fresh.port {
+            committed = fresh
+        }
+        if moved { adoptIcon() }
+    }
+
     /// Between two fifths and three times, which is as far as a page is worth
     /// pushing in either direction.
     func magnify(to value: CGFloat) {
         let wanted = min(3, max(0.4, value))
-        guard abs(wanted - web.pageZoom) > 0.004 else { return }
-        web.pageZoom = wanted
+        let page = live
+        guard abs(wanted - page.pageZoom) > 0.004 else { return }
+        page.pageZoom = wanted
         zoom = wanted
         rememberZoom()
         onZoom?(self, wanted)
     }
 
-    func magnify(by factor: CGFloat) { magnify(to: web.pageZoom * factor) }
+    func magnify(by factor: CGFloat) { magnify(to: live.pageZoom * factor) }
 
     /// ⌘0 undoes both kinds of zoom at once — whichever one you reached for —
-    /// back to the size every site starts at.
+    /// back to the size every site starts at. The pinch's kind is WebKit's.
     func resetZoom() {
         magnify(to: Tab.defaultZoom)
-        guard web.magnification != 1 else { return }
+        guard let web = built, web.magnification != 1 else { return }
         web.magnification = 1
         onZoom?(self, 1)
     }
@@ -814,8 +911,10 @@ final class Tab: ObservableObject, Identifiable {
         built?.evaluateInSearch(Veiling.style(css))
     }
 
-    func startPicking() { web.evaluateInSearch("window.__officeVeil && window.__officeVeil.on()") }
-    func stopPicking() { web.evaluateInSearch("window.__officeVeil && window.__officeVeil.off()") }
+    // Hiding things, filling sign-ins: WebKit's alone, through the page
+    // scripts only its view carries, and nothing without one.
+    func startPicking() { built?.evaluateInSearch("window.__officeVeil && window.__officeVeil.on()") }
+    func stopPicking() { built?.evaluateInSearch("window.__officeVeil && window.__officeVeil.off()") }
 
     func foundSignIn() { onSignIn?(self) }
 
@@ -874,7 +973,7 @@ final class Tab: ObservableObject, Identifiable {
             }
             return
         }
-        web.evaluateInSearch("!!(window.__officeForms && window.__officeForms.hasPassword())") { [weak self] still in
+        built?.evaluateInSearch("!!(window.__officeForms && window.__officeForms.hasPassword())") { [weak self] still in
             MainActor.assumeIsolated {
                 guard let self, let sent = self.sent else { return }
                 // The box is still there: a refused sign-in, or the second
@@ -893,7 +992,11 @@ final class Tab: ObservableObject, Identifiable {
     /// something about: the sign-in fields that were there a moment ago,
     /// when this was offered, are gone by the time it actually runs.
     func fill(user: String, password: String, done: ((Bool) -> Void)? = nil) {
-        web.evaluateInSearch(
+        guard let built else {
+            done?(false)
+            return
+        }
+        built.evaluateInSearch(
             "window.__officeForms && window.__officeForms.fill(`\(escape(user))`, `\(escape(password))`)"
         ) { result in
             done?((result as? Bool) ?? false)
@@ -906,13 +1009,13 @@ final class Tab: ObservableObject, Identifiable {
 
     /// Show one hidden thing while the pointer rests on its row in the list.
     func peek(_ selector: String, keeping css: String) {
-        web.evaluateInSearch(
+        built?.evaluateInSearch(
             "window.__officeVeil && window.__officeVeil.peek(`\(escape(css))`, `\(escape(selector))`)"
         )
     }
 
     func unpeek(_ css: String) {
-        web.evaluateInSearch("window.__officeVeil && window.__officeVeil.unpeek(`\(escape(css))`)")
+        built?.evaluateInSearch("window.__officeVeil && window.__officeVeil.unpeek(`\(escape(css))`)")
     }
 
     private func escape(_ text: String) -> String {
@@ -939,7 +1042,7 @@ final class Tab: ObservableObject, Identifiable {
         // extension's page opened with window.open is built from that
         // extension's configuration too. A tab with no page yet was just
         // built for where it is going, so it goes there.
-        if let onCross, let here = built?.url ?? address,
+        if let onCross, let here = page?.url ?? address,
            Browser.extensionHost(of: here) != Browser.extensionHost(of: url) {
             onCross(self, url)
             return
@@ -963,7 +1066,7 @@ final class Tab: ObservableObject, Identifiable {
         picture = nil
         cover = nil
         adoptIcon()
-        web.open(url)
+        show(url)
     }
 
     /// Brought back from the last session: everything the row needs to draw it,
@@ -1008,8 +1111,8 @@ final class Tab: ObservableObject, Identifiable {
     /// Back still going back. What was typed and not sent is the one thing
     /// that can't come back, which is why the browser asks `unsaved` first.
     func sleep(picture: Data?) {
-        guard let url = address, let built else { return }
-        memory = built.interactionState
+        guard let url = address, let page else { return }
+        memory = page.restorableState
         self.picture = picture
         pending = url
         stale = false
@@ -1019,9 +1122,21 @@ final class Tab: ObservableObject, Identifiable {
 
     /// A page moved to another space must use that space's cookies. WebKit
     /// binds the store when the view is made, so keep its restorable state
-    /// and build the view again with the destination's store.
+    /// and build the view again with the destination's store. Chromium
+    /// binds its profile when the page is made, the same way: the page goes,
+    /// and the next one is made with the profile of the space it is now in.
     func rehome(in space: UUID) {
-        guard !shy, !bench, store !== Spaces.store(for: space) else { return }
+        guard !shy, !bench else { return }
+        if WebEngine.current == .chromium {
+            guard let page, profile != Spaces.profile(for: space) else { return }
+            memory = page.isLoading ? nil : page.restorableState
+            pending = address ?? page.url
+            picture = nil
+            cover = nil
+            discard()
+            return
+        }
+        guard store !== Spaces.store(for: space) else { return }
         if let built {
             memory = built.isLoading ? nil : built.interactionState
             pending = address ?? built.url
@@ -1036,7 +1151,7 @@ final class Tab: ObservableObject, Identifiable {
     /// is made the new way. One already made keeps what it was made with —
     /// WebKit fixes it then — until the tab closes or sleeps.
     func playbackChanged() {
-        configuration.mediaTypesRequiringUserActionForPlayback = Web.playback
+        configuration?.mediaTypesRequiringUserActionForPlayback = Web.playback
     }
 
     /// Whether the page holds something typed and not yet sent — a draft, a
@@ -1055,8 +1170,8 @@ final class Tab: ObservableObject, Identifiable {
     /// process, so a view that is off screen — every tab but the one you are
     /// on — can still be pictured. Nil when there is nothing to draw.
     func snapshot(_ done: @escaping (Data?) -> Void) {
-        guard let built else { return done(nil) }
-        built.takeSnapshot(with: nil) { image, _ in
+        guard let page else { return done(nil) }
+        page.snapshot(width: nil) { image in
             guard let image, let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
                 return done(nil)
             }
@@ -1086,10 +1201,8 @@ final class Tab: ObservableObject, Identifiable {
             }
             return
         }
-        guard let built else { return done(nil) }
-        let configuration = WKSnapshotConfiguration()
-        configuration.snapshotWidth = NSNumber(value: Double(width))
-        built.takeSnapshot(with: configuration) { image, _ in done(image) }
+        guard let page else { return done(nil) }
+        page.snapshot(width: width, done)
     }
 
     nonisolated private static func jpeg(_ image: CGImage) -> Data? {
@@ -1149,6 +1262,17 @@ final class Tab: ObservableObject, Identifiable {
     /// about:blank with nothing left to say so. Still there, or still
     /// answering for a process that's already gone, is asked once more.
     private func loadAndVerify(_ url: URL, state: Any? = nil, tries: Int = 0) {
+        // A Chromium page is made for its first address, which it loads as
+        // soon as it can, and it says so itself when its process goes
+        // (pageProcessGone): nothing to wait for here, nothing to ask after.
+        if page == nil, WebEngine.current == .chromium {
+            if let state, !url.isFileURL {
+                chromium(nil).restore(state)
+            } else {
+                _ = chromium(url)
+            }
+            return
+        }
         // Wait for the stage to take the view back before loading into it. A
         // page loaded while its view is off any window boots as a hidden tab,
         // and a site that holds everything until it is shown — x.com does,
@@ -1159,8 +1283,8 @@ final class Tab: ObservableObject, Identifiable {
         // SwiftUI actually putting the view on screen. Bounded at about a
         // second, so a wake with no stage waiting for it still loads rather
         // than hanging on one that will never come.
-        let view = web
-        if view.window == nil, tries < 50 {
+        let page = live
+        if page.view.window == nil, tries < 50 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
                 self?.loadAndVerify(url, state: state, tries: tries + 1)
             }
@@ -1171,13 +1295,17 @@ final class Tab: ObservableObject, Identifiable {
         // from the address. A file does too: its history comes back without
         // the folder it may read, and showed nothing.
         if let state, !url.isFileURL {
-            view.interactionState = state
+            page.restore(state)
         } else {
-            view.open(url)
+            page.open(url)
         }
+        guard built != nil else { return }
+        // Asked of the view this load went into, and only while the tab
+        // still has it: one put down meanwhile (⌘W on a pin, sleep) is not
+        // built again here for a page nobody is waiting for.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self else { return }
-            guard built?.url?.absoluteString != "about:blank" else {
+            guard let self, let web = built else { return }
+            guard web.url?.absoluteString != "about:blank" else {
                 web.open(url)
                 return
             }
@@ -1187,7 +1315,7 @@ final class Tab: ObservableObject, Identifiable {
                     guard error.domain == WKErrorDomain,
                           error.code == WKError.webContentProcessTerminated.rawValue
                     else { return }
-                    self.web.open(url)
+                    self.built?.open(url)
                 }
             }
         }
@@ -1208,9 +1336,11 @@ final class Tab: ObservableObject, Identifiable {
         // A view with no document behind an address: whatever emptied it, the
         // address is what to show, and reload alone would have nothing to do.
         if hollow, let address {
-            web.open(address)
+            show(address)
             return
         }
+        // Chromium says for itself when a page's process has gone.
+        guard let web = built else { return }
         web.evaluateJavaScript("document.readyState") { [weak self] _, error in
             MainActor.assumeIsolated {
                 guard let self, let error = error as NSError? else { return }
@@ -1270,8 +1400,8 @@ final class Tab: ObservableObject, Identifiable {
     /// True when the web view holds nothing — never loaded, or emptied —
     /// while the tab still names a page. The white page, in other words.
     var hollow: Bool {
-        guard let built else { return address != nil }
-        guard let there = built.url else { return address != nil }
+        guard let page else { return address != nil }
+        guard let there = page.url else { return address != nil }
         return there.absoluteString == "about:blank" && pending == nil && address != nil
     }
 
@@ -1284,18 +1414,18 @@ final class Tab: ObservableObject, Identifiable {
         reader = false
         // A file is read again with the folder it may read (see open).
         if let address, hollow || address.isFileURL {
-            web.open(address)
-        } else if fromOrigin {
-            web.reloadFromOrigin()
+            show(address)
         } else {
-            web.reload()
+            live.reload(fromOrigin: fromOrigin)
         }
     }
-    func stop() { web.stopLoading() }
+    /// Nothing to stop, or to go back or forward in, without a page: none
+    /// is built for it.
+    func stop() { page?.stopLoading() }
     /// Straight through, every time. A page that has to be fetched again is
     /// fetched again — nothing is kept behind to make that look otherwise.
-    func back() { web.goBack() }
-    func forward() { web.goForward() }
+    func back() { page?.goBack() }
+    func forward() { page?.goForward() }
 
     /// Called when the tab is thrown away. Without it the view keeps running
     /// whatever the page left behind — timers, video, sockets.
@@ -1312,27 +1442,122 @@ final class Tab: ObservableObject, Identifiable {
 
     /// The view and everything listening to it, gone — timers, video,
     /// sockets, and the document WebKit would otherwise keep in its
-    /// back-forward cache. The tab keeps its address; `web` builds again the
-    /// next time anyone asks for it.
+    /// back-forward cache. The tab keeps its address; `live` builds again
+    /// the next time anyone asks for it.
     private func discard() {
         watch = []
         ears.stop()
-        guard let web = built else { return }
-        built = nil
-        Passkeys.shared.forget(web)
-        let controller = web.configuration.userContentController
-        Web.release(controller)
-        controller.removeAllUserScripts()
-        web.onPull = nil
-        web.onTouch = nil
-        web.onKeys = nil
-        web.searchName = nil
-        web.onSearch = nil
-        web.stopLoading()
-        web.navigationDelegate = nil
-        web.uiDelegate = nil
-        web.removeFromSuperview()
+        guard let page else { return }
+        self.page = nil
+        profile = nil
+        // What only WebKit's view carries: its passkey request, Search's
+        // handlers and scripts, the closures it reports through.
+        if let web = page as? PageView {
+            Passkeys.shared.forget(web)
+            let controller = web.configuration.userContentController
+            Web.release(controller)
+            controller.removeAllUserScripts()
+            web.onPull = nil
+            web.onTouch = nil
+            web.onKeys = nil
+            web.searchName = nil
+            web.onSearch = nil
+        }
+        page.tearDown()
     }
+}
+
+/// Which window a tab's Chromium page answers to: what WebKit's pages tell
+/// the browser through its navigation and UI delegates, Chromium's tell
+/// their tab, and the tab passes on here. Browser is the one host, in
+/// Browser.swift beside its WebKit delegates, whose bodies it shares.
+@MainActor
+protocol TabHost: AnyObject {
+    /// A new document in the main frame.
+    func tabCommitted(_ tab: Tab)
+    /// The main frame finished loading.
+    func tabFinished(_ tab: Tab)
+    /// The main frame failed to load; `code` is an NSURLError code.
+    func tabFailed(_ tab: Tab, code: Int)
+    /// The page named its icons.
+    func tabIcons(_ tab: Tab)
+    /// The page's process died.
+    func tabProcessGone(_ tab: Tab)
+    /// A link asked for a tab of its own.
+    func tabWantsTab(_ tab: Tab, url: URL, foreground: Bool)
+    /// The page called window.close().
+    func tabWantsClose(_ tab: Tab)
+    /// A download finished at `file`.
+    func tabDownloaded(_ tab: Tab, file: URL, from source: URL?)
+    /// The space the tab is in, for the profile its next page signs in with.
+    func space(of tab: Tab) -> UUID
+    /// Where the window's downloads land: its space's folder, or Settings'.
+    var downloadsFolder: URL { get }
+}
+
+// What a Chromium page reports, taken in the way WebKit's observers take
+// the same from its view, and passed to the window where it is the
+// window's business. Never called in WebKit mode.
+extension Tab: PageEventSink {
+    func pageTitle(_ title: String) { heard(title: title) }
+
+    func pageURL(_ url: URL) { heard(url: url) }
+
+    func pageProgress(_ progress: Double) { self.progress = progress }
+
+    func pageLoading(_ loading: Bool, canGoBack: Bool, canGoForward: Bool) {
+        self.loading = loading
+        self.canGoBack = canGoBack
+        self.canGoForward = canGoForward
+    }
+
+    func pageCommitted() {
+        // A page is up: Chromium started, and the next launch may run it
+        // again (see WebEngine.startingKey).
+        if !Tab.chromiumUp {
+            Tab.chromiumUp = true
+            Store.settings.removeObject(forKey: WebEngine.startingKey)
+        }
+        // The icons named were the last document's: another site's, it may
+        // be, and not to be fetched and kept as this one's.
+        favicons = []
+        host?.tabCommitted(self)
+    }
+
+    func pageFinished() { host?.tabFinished(self) }
+
+    func pageFailed(code: Int, description: String) { host?.tabFailed(self, code: code) }
+
+    func pageAudible(_ audible: Bool) { noisy = audible }
+
+    func pageFavicons(_ urls: [URL]) {
+        guard urls != favicons else { return }
+        favicons = urls
+        host?.tabIcons(self)
+    }
+
+    func pageHover(_ link: URL?) { onLink?(self, link?.absoluteString) }
+
+    func pageFullscreen(_ on: Bool) { immersed = on }
+
+    func pageProcessGone() { host?.tabProcessGone(self) }
+
+    func pageWantsTab(_ url: URL, foreground: Bool) { host?.tabWantsTab(self, url: url, foreground: foreground) }
+
+    func pageWantsClose() { host?.tabWantsClose(self) }
+
+    func pageDownloaded(_ file: URL, from source: URL?) { host?.tabDownloaded(self, file: file, from: source) }
+
+    /// A click, a scroll, the keyboard: the picture of a page waking comes
+    /// off, and with two pages up this one becomes the focused one, as a
+    /// click into WebKit's view makes it (see PageView.onKeys).
+    func pageTouched() {
+        uncover()
+        onKeys?(self)
+    }
+
+    /// Chromium has had a page up in this process.
+    private static var chromiumUp = false
 }
 
 
@@ -1596,10 +1821,13 @@ final class PageView: WKWebView {
     /// (0 left, 1 right, 2 middle, 3 back, 4 forward) that most mouse
     /// drivers settled on regardless, so it's what a mouse's own firmware
     /// is tuned to send.
+    // WebKit's own goBack() and goForward() here, by way of super: this
+    // view's, for the page a tab holds (PageView+Engine.swift), answer
+    // nothing, and the two would otherwise be one name with two meanings.
     override func otherMouseDown(with event: NSEvent) {
         switch event.buttonNumber {
-        case 3 where canGoBack: goBack()
-        case 4 where canGoForward: goForward()
+        case 3 where canGoBack: super.goBack()
+        case 4 where canGoForward: super.goForward()
         default: super.otherMouseDown(with: event)
         }
     }
@@ -1607,8 +1835,8 @@ final class PageView: WKWebView {
     /// Logi Options+ sends its Back/Forward buttons as a swipe, not buttons
     /// 3 and 4 — deltaX 1 for back, -1 for forward, as Safari reads it.
     override func swipe(with event: NSEvent) {
-        if event.deltaX > 0, canGoBack { goBack() }
-        else if event.deltaX < 0, canGoForward { goForward() }
+        if event.deltaX > 0, canGoBack { super.goBack() }
+        else if event.deltaX < 0, canGoForward { super.goForward() }
         else { super.swipe(with: event) }
     }
 
@@ -1999,9 +2227,9 @@ final class PageView: WKWebView {
         if stops != nil, items.indices.contains(picked) {
             go(to: items[picked])
         } else if back {
-            goBack()
+            super.goBack()
         } else {
-            goForward()
+            super.goForward()
         }
         pulls += 1
         let mine = pulls
@@ -2041,7 +2269,7 @@ final class ScrollRelay: NSObject, WKScriptMessageHandler {
     ) {
         guard let body = message.body as? [String: Any] else { return }
         if let side = body["side"] as? String {
-            MainActor.assumeIsolated { tab?.web.answer(free: side == "free") }
+            MainActor.assumeIsolated { tab?.built?.answer(free: side == "free") }
             return
         }
         guard let y = body["y"] as? Double,

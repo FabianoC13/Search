@@ -106,7 +106,7 @@ enum Browsers {
         all.append(browser)
         if Front.shared.browser == nil { Front.shared.set(browser) }
         // Extensions see every window (windows.getAll, a tab's windowId).
-        if #available(macOS 15.4, *) { Extensions.shared.attach(browser) }
+        if #available(macOS 15.4, *), WebEngine.isWebKit { Extensions.shared.attach(browser) }
     }
 
     static func browser(for window: NSWindow?) -> Browser? {
@@ -120,7 +120,7 @@ enum Browsers {
         browser.shut = false
         Front.shared.set(browser)
         Spaces.current = browser.spaceID
-        if #available(macOS 15.4, *) { Extensions.shared.focused(browser) }
+        if #available(macOS 15.4, *), WebEngine.isWebKit { Extensions.shared.focused(browser) }
     }
 
     // MARK: - opening
@@ -265,7 +265,7 @@ enum Browsers {
             if closed.count > 10 { closed.removeFirst(closed.count - 10) }
         }
         all.removeAll { $0 === browser }
-        if #available(macOS 15.4, *) { Extensions.shared.detach(browser) }
+        if #available(macOS 15.4, *), WebEngine.isWebKit { Extensions.shared.detach(browser) }
         browser.closeAll()
         frames[ObjectIdentifier(browser)] = nil
         if Front.shared.browser === browser {

@@ -55,6 +55,9 @@ final class Links: NSObject, NSApplicationDelegate {
         // And the bookmarks or downloads list saved a moment ago, still on
         // their way to the disk.
         Disk.drain()
+        // Chromium last, with the session already written: it closes every
+        // page it has and stops, and nothing after it may need a page.
+        if WebEngine.current == .chromium { ChromiumRuntime.shutdown() }
     }
 
     /// The nearest thing to a crash reporter a browser with no server can
@@ -177,8 +180,9 @@ final class Links: NSObject, NSApplicationDelegate {
             // The window in front's browser, or a window brought back for it:
             // the link lands where you are, not in the first window.
             let browser = Browsers.ensureWindow()
-            // In a small window of its own, for whoever chose that.
-            if browser.prefs.littleLinks {
+            // In a small window of its own, for whoever chose that — in
+            // WebKit mode, where Settings offers it.
+            if browser.prefs.littleLinks, WebEngine.isWebKit {
                 LittleWindow.show(url, for: browser)
                 return
             }

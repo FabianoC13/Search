@@ -376,6 +376,8 @@ extension ShortcutStore {
 
     /// The commands of every extension loaded, with a name to show.
     func extensionCommands() -> [ExtensionCommand] {
+        // None in Chromium mode, where extensions are never loaded.
+        guard WebEngine.isWebKit else { return [] }
         let names = Dictionary(Extensions.shared.installed.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
         return Extensions.shared.contexts.sorted { $0.key < $1.key }.flatMap { ext, context in
             context.commands.map {
@@ -434,4 +436,9 @@ extension Command {
                                      "tabs.swapSplit", "tabs.separateSplit"]
     /// The AI add-on's: with it off, not listed.
     static let ai: Set<String> = ["view.summarize", "view.ask"]
+    /// WebKit's alone — reading mode, the floating video, hiding things,
+    /// finding on the page — and AI, which reads the page through WebKit:
+    /// in Chromium mode, not in the menus and not listed.
+    static let webKitOnly: Set<String> = ai.union(["view.reader", "view.float", "view.hide", "view.hidden",
+                                                   "edit.find", "edit.findNext", "edit.findPrevious"])
 }

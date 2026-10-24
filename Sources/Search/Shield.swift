@@ -99,7 +99,9 @@ final class Shield: ObservableObject {
     ]
 
     func compile() {
-        guard list == nil else { return }
+        // WebKit's rule compiler, and the file it maps: nothing Chromium
+        // mode may start, and nothing its pages could use.
+        guard list == nil, WebEngine.isWebKit else { return }
         trouble = nil
         var rules: [[String: Any]] = Shield.unwanted.map { domain in
             let escaped = domain.replacingOccurrences(of: ".", with: "\\.")
@@ -129,6 +131,7 @@ final class Shield: ObservableObject {
             return
         }
 
+        Census.ruleLists += 1
         guard let store = WKContentRuleListStore.default() else {
             trouble = "WebKit has nowhere to compile it"
             return
