@@ -4135,6 +4135,120 @@ final class Browser: NSObject, ObservableObject {
     func forward() { active?.forward() }
 }
 
+// MARK: - what a page reports
+
+// What a page reports that is the window's business. Chromium's pages say
+// it through their tab (Tab's PageEventSink); WebKit's delegates below take
+// the same from WebKit and hand on to these, so both engines' pages go
+// through one body for each.
+
+extension Browser: TabHost {
+    func tabCommitted(_ tab: Tab) {
+        tab.didCommit()
+        if tab.id == activeID {
+            invalidateFindPage(retryOnActiveTab: false)
+            linkStatus.dismiss()
+        }
+        tab.failure = nil
+        tab.typing = false
+        // Whatever you last set this site to, before it draws a single frame
+        // at the wrong size.
+        tab.applyRememberedZoom()
+        // A tab waking from sleep: the new document is in, and a moment
+        // after it is on screen the picture of the old one can go.
+        tab.uncover(after: 0.45)
+    }
+
+    func tabFinished(_ tab: Tab) {
+        guard let url = tab.address else { return }
+        tab.uncover()
+        // The find bar still open over a page that has just come in: look
+        // for the same words on it.
+        if tab.id == activeID, finding, findSpec == nil,
+           !needle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            look(forward: true)
+        }
+        tellStore(tab)
+        // A page that arrived after a password went out: did the sign-in take?
+        tab.settleSignIn()
+        // The icon is asked for whether or not the tab is showing one: it may
+        // be turned on a moment later, and a tab that then has to wait for a
+        // fetch looks broken.
+        Favicons.shared.fetch(for: tab)
+        guard !tab.shy, !tab.bench else { return }
+        history.record(url, title: tab.title)
+        // A site's home page that says where its search is (OpenSearch):
+        // with Search a site on, it joins the list (see SiteSearch.learn).
+        // Chromium hands back no answer, so only WebKit's pages say.
+        if prefs.searchesSites, url.scheme == "https", url.path.isEmpty || url.path == "/" {
+            tab.page?.evaluate(SiteSearch.lookup) { value in
+                guard let text = value as? String, let description = URL(string: text) else { return }
+                MainActor.assumeIsolated { SiteSearch.learn(from: url, description: description) }
+            }
+        }
+    }
+
+    /// `code` is an NSURLError code; the engine has filtered out what isn't
+    /// a failure of its own kind (see fail).
+    func tabFailed(_ tab: Tab, code: Int) {
+        tab.uncover()
+        // Cancelled is not a failure: it's what a redirect, a stopped load, or
+        // a second Return in quick succession looks like from here.
+        guard code != NSURLErrorCancelled else { return }
+        tab.failure = message(for: code)
+    }
+
+    func tabIcons(_ tab: Tab) {
+        // Named while the page loads, the icon waits for the load to finish
+        // (tabFinished); named after, the page has changed it.
+        guard !tab.loading else { return }
+        Favicons.shared.fetch(for: tab, changed: true)
+    }
+
+    func tabProcessGone(_ tab: Tab) {
+        dropQuestions(for: tab.id)
+        // In front of you: straight back, a reload beats a white page with a
+        // button on it. Behind another tab: the moment you come back to it.
+        if tab.id == activeID, !tab.isBlank {
+            tab.recoverFromCrash()
+        } else {
+            tab.stale = true
+        }
+    }
+
+    /// ⌘-click, the middle button, a link with a target: beside the page it
+    /// came from, private from a private one, behind it unless it asked for
+    /// the front — as a ⌘-clicked link opens from a WebKit page.
+    func tabWantsTab(_ tab: Tab, url: URL, foreground: Bool) {
+        open(url, foreground: foreground, from: tab, mayWait: true)
+    }
+
+    /// A page asking to close itself (see webViewDidClose).
+    func tabWantsClose(_ tab: Tab) {
+        // Back to whoever opened it, so you land where you started the sign-in
+        // rather than wherever the row happens to put you.
+        if let opener = tab.opener, let home = tabs.first(where: { $0.id == opener }) {
+            select(home)
+        }
+        tab.pin = nil
+        close(tab)
+    }
+
+    /// Into the Downloads list, as WebKit's downloads go once they finish —
+    /// a private tab's excepted, which the list never shows.
+    func tabDownloaded(_ tab: Tab, file: URL, from source: URL?) {
+        guard !tab.shy else {
+            announce("Saved \(file.lastPathComponent)")
+            return
+        }
+        saved(file, from: source)
+    }
+
+    func space(of tab: Tab) -> UUID {
+        parked.first { $0.value.tabs.contains { $0 === tab } }?.key ?? spaceID
+    }
+}
+
 // MARK: - WebKit
 
 extension Browser: WKNavigationDelegate, WKUIDelegate {
@@ -4783,13 +4897,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     /// reload to fetch, because there is no longer an address to fetch.
     func webViewDidClose(_ webView: WKWebView) {
         guard let tab = tab(for: webView) else { return }
-        // Back to whoever opened it, so you land where you started the sign-in
-        // rather than wherever the row happens to put you.
-        if let opener = tab.opener, let home = tabs.first(where: { $0.id == opener }) {
-            select(home)
-        }
-        tab.pin = nil
-        close(tab)
+        tabWantsClose(tab)
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
@@ -4798,20 +4906,8 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
             littleTab(for: webView)?.failure = nil
             return
         }
-        tab.didCommit()
         tab.extensionReturn.finished(navigation)
-        if tab.id == activeID {
-            invalidateFindPage(retryOnActiveTab: false)
-            linkStatus.dismiss()
-        }
-        tab.failure = nil
-        tab.typing = false
-        // Whatever you last set this site to, before it draws a single frame
-        // at the wrong size.
-        tab.applyRememberedZoom()
-        // A tab waking from sleep: the new document is in, and a moment
-        // after it is on screen the picture of the old one can go.
-        tab.uncover(after: 0.45)
+        tabCommitted(tab)
     }
 
     /// The page has drawn something: a view kept out of sight until now, so
@@ -4827,48 +4923,23 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         // A page with nothing to lay out never has a first frame. Done is
         // done, and it is shown.
         (webView as? PageView)?.showFirstFrame()
-        guard let tab = anyTab(for: webView), let url = tab.address else { return }
-        tab.uncover()
-        // The find bar still open over a page that has just come in: look
-        // for the same words on it.
-        if tab.id == activeID, finding, findSpec == nil,
-           !needle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            look(forward: true)
-        }
-        tellStore(tab)
-        // A page that arrived after a password went out: did the sign-in take?
-        tab.settleSignIn()
-        // The icon is asked for whether or not the tab is showing one: it may
-        // be turned on a moment later, and a tab that then has to wait for a
-        // fetch looks broken.
-        Favicons.shared.fetch(for: tab)
-        guard !tab.shy, !tab.bench else { return }
-        history.record(url, title: tab.title)
-        // A site's home page that says where its search is (OpenSearch):
-        // with Search a site on, it joins the list (see SiteSearch.learn).
-        if prefs.searchesSites, url.scheme == "https", url.path.isEmpty || url.path == "/" {
-            webView.evaluateInSearch(SiteSearch.lookup) { value in
-                guard let text = value as? String, let description = URL(string: text) else { return }
-                MainActor.assumeIsolated { SiteSearch.learn(from: url, description: description) }
-            }
-        }
+        guard let tab = anyTab(for: webView) else { return }
+        tabFinished(tab)
     }
 
     private func fail(_ webView: WKWebView, _ error: Error) {
-        let tab = tab(for: webView) ?? littleTab(for: webView)
-        tab?.uncover()
+        guard let tab = tab(for: webView) ?? littleTab(for: webView) else { return }
         let nsError = error as NSError
-        let code = nsError.code
-        // Cancelled is not a failure: it's what a redirect, a stopped load, or
-        // a second Return in quick succession looks like from here.
-        guard code != NSURLErrorCancelled else { return }
         // Nor is a page that turned into a download: WebKit ends that
         // navigation with "frame load interrupted" (102) while the file goes
         // on arriving. Answered as a failure, it covered the page with "The
         // page didn't load" over a download that had worked — clicked again,
         // it downloaded again.
-        guard !(nsError.domain == "WebKitErrorDomain" && code == 102) else { return }
-        tab?.failure = message(for: code)
+        guard !(nsError.domain == "WebKitErrorDomain" && nsError.code == 102) else {
+            tab.uncover()
+            return
+        }
+        tabFailed(tab, code: nsError.code)
     }
 
     private func message(for code: Int) -> String {
@@ -5033,7 +5104,9 @@ extension Browser: WKDownloadDelegate {
         return ["", ".", "..", "/"].contains(last) ? "download" : last
     }
 
-    private func saved(_ file: URL, from source: URL?) {
+    /// A file kept: into the Downloads list, and said. WebKit's downloads
+    /// come here as they finish, and Chromium's through tabDownloaded.
+    func saved(_ file: URL, from source: URL?) {
         loot.add(Keep(name: file.lastPathComponent, from: source?.host() ?? "", path: file.path, date: Date()))
         announce("Saved \(file.lastPathComponent)", file: file)
     }
