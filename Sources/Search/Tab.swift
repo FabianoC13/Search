@@ -293,7 +293,7 @@ final class Tab: ObservableObject, Identifiable {
 
     /// Told what a Chromium page reports that is the window's business:
     /// commits, loads finished and failed, new tabs, closing, crashes,
-    /// downloads (see TabHost.swift). WebKit's pages tell the browser
+    /// downloads (see Browser's TabHost). WebKit's pages tell the browser
     /// through its delegates instead.
     weak var host: TabHost?
 
@@ -1261,7 +1261,11 @@ final class Tab: ObservableObject, Identifiable {
         // soon as it can, and it says so itself when its process goes
         // (pageProcessGone): nothing to wait for here, nothing to ask after.
         if page == nil, WebEngine.current == .chromium {
-            _ = chromium(url)
+            if let state, !url.isFileURL {
+                chromium(nil).restore(state)
+            } else {
+                _ = chromium(url)
+            }
             return
         }
         // Wait for the stage to take the view back before loading into it. A
@@ -1460,7 +1464,8 @@ final class Tab: ObservableObject, Identifiable {
 
 /// Which window a tab's Chromium page answers to: what WebKit's pages tell
 /// the browser through its navigation and UI delegates, Chromium's tell
-/// their tab, and the tab passes on here (see TabHost.swift).
+/// their tab, and the tab passes on here. Browser is the one host, in
+/// Browser.swift beside its WebKit delegates, whose bodies it shares.
 @MainActor
 protocol TabHost: AnyObject {
     /// A new document in the main frame.

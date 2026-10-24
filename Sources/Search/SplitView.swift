@@ -119,7 +119,7 @@ private struct PaneLayers: View {
         .overlay {
             // Over the page the link is on, focused or not.
             if browser.prefs.showsLinks {
-                LinkBubble(status: browser.linkStatus, page: paired ? tab.built : nil)
+                LinkBubble(status: browser.linkStatus, page: paired ? tab.page?.view : nil)
             }
         }
         .overlay(alignment: .topLeading) {

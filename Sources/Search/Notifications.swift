@@ -212,7 +212,7 @@ final class SiteNotifications: NSObject {
     private func bringForward(_ origin: String, from store: WKWebsiteDataStore?) {
         let found = Browsers.all.filter { $0.extensionPopup == nil }.flatMap { browser in
             browser.tabs.filter { tab in
-                guard !tab.shy, tab.store.isPersistent, let url = tab.address, let scheme = url.scheme, let host = url.host() else { return false }
+                guard !tab.shy, tab.store?.isPersistent == true, let url = tab.address, let scheme = url.scheme, let host = url.host() else { return false }
                 return Browser.origin(scheme, host, url.port ?? 0) == origin
             }.map { (browser, $0) }
         }

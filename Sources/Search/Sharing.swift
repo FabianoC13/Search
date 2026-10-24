@@ -11,7 +11,7 @@ extension Browser {
     /// column's page otherwise. The window's own corner is the fallback.
     func share() {
         guard let url = active?.address, let window = self.window ?? Links.window,
-              let view = active?.built.flatMap({ $0.window === window ? $0 : nil }) ?? window.contentView
+              let view = active?.page.flatMap({ $0.view.window === window ? $0.view : nil }) ?? window.contentView
         else { return }
         // A few points in from the corner, so the arrow points at the page
         // rather than at its edge. Flipped or not, the picker hangs below.

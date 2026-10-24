@@ -99,10 +99,18 @@ enum Spaces {
     @MainActor static func store(for id: UUID) -> WKWebsiteDataStore {
         if id == Space.firstID || sharing.contains(id) { return Store.websites }
         if let made = stores[id] { return made }
+        Census.stores += 1
         let made = WKWebsiteDataStore(forIdentifier: id)
         if Store.keepsSignIns { Store.followSignIns(made) }
         stores[id] = made
         return made
+    }
+
+    /// A space's profile in Chromium mode, chosen as `store(for:)` chooses
+    /// WebKit's: the shared one for the first space and those signed in
+    /// where it is, one of its own for any other.
+    @MainActor static func profile(for id: UUID) -> ChromiumProfile {
+        id == Space.firstID || sharing.contains(id) ? .main : .space(id)
     }
 
     /// The shared store and every space's own made so far. Not a private
@@ -119,6 +127,15 @@ enum Spaces {
     /// launch if the tries in between don't manage.
     @MainActor static func erase(_ id: UUID) {
         guard id != Space.firstID else { return }
+        // Chromium mode makes no store to empty: WebKit's is only written
+        // down, for the next launch that runs WebKit to remove (see sweep).
+        // TODO: the space's Chromium profile, once ChromiumRuntime can
+        // remove one.
+        guard WebEngine.isWebKit else {
+            let pending = Set(Store.settings.stringArray(forKey: "spaces.erasing") ?? []).union([id.uuidString])
+            Store.settings.set(pending.sorted(), forKey: "spaces.erasing")
+            return
+        }
         // And once more a moment later, for what its closing tabs were
         // still writing — the cache of the page on screen, for one.
         let store = store(for: id)
@@ -141,6 +158,9 @@ enum Spaces {
 
     /// Every store of a deleted space that is still there, tried again.
     @MainActor static func sweep() {
+        // WebKit's data store machinery is WebKit's to start; Chromium mode
+        // leaves the list for the next launch that runs it.
+        guard WebEngine.isWebKit else { return }
         for text in Store.settings.stringArray(forKey: "spaces.erasing") ?? [] {
             guard let id = UUID(uuidString: text) else { continue }
             Task { @MainActor in
