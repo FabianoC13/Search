@@ -19,9 +19,17 @@ struct SearchApp: App {
     private var browser: Browser { front.browser ?? SceneSlot.shared.browser }
 
     init() {
+        // Which engine draws pages is settled first, once, before any window
+        // and its browser are made: everything after asks it which of
+        // WebKit's things it may make (see PageEngine.swift).
+        _ = WebEngine.current
+        // A relaunch that switched engines carries the session across, as an
+        // update's relaunch does: it is the same session, drawn another way.
+        let switching = Store.settings.bool(forKey: WebEngine.switchingKey)
+        Store.settings.removeObject(forKey: WebEngine.switchingKey)
         // Settings › General › Start with a fresh window: the files are cut
         // down before any window reads its row from them.
-        if Store.settings.bool(forKey: Preferences.freshKey) {
+        if !switching, Store.settings.bool(forKey: Preferences.freshKey) {
             Session.startFresh(spaces: Spaces.read().map(\.id))
             Browsers.startFresh()
         }
@@ -77,16 +85,19 @@ struct SearchApp: App {
                     .disabled(browser.active?.isBlank ?? true)
             }
             CommandGroup(after: .pasteboard) {
-                Divider()
-                Button("Find on Page…") { browser.openFind() }
-                    .shortcut("edit.find")
-                    .disabled(browser.active?.isBlank ?? true)
-                Button("Find Next") { browser.look(forward: true) }
-                    .shortcut("edit.findNext")
-                    .disabled(!browser.finding)
-                Button("Find Previous") { browser.look(forward: false) }
-                    .shortcut("edit.findPrevious")
-                    .disabled(!browser.finding)
+                // WebKit's find; Chromium mode has none yet.
+                if WebEngine.isWebKit {
+                    Divider()
+                    Button("Find on Page…") { browser.openFind() }
+                        .shortcut("edit.find")
+                        .disabled(browser.active?.isBlank ?? true)
+                    Button("Find Next") { browser.look(forward: true) }
+                        .shortcut("edit.findNext")
+                        .disabled(!browser.finding)
+                    Button("Find Previous") { browser.look(forward: false) }
+                        .shortcut("edit.findPrevious")
+                        .disabled(!browser.finding)
+                }
             }
             CommandGroup(replacing: .toolbar) {
                 Toggle("Show Tabs in Sidebar", isOn: Binding(
@@ -113,12 +124,17 @@ struct SearchApp: App {
                     .shortcut("view.reload")
                 Button("Reload Page From Origin") { browser.reload(fromOrigin: true) }
                     .shortcut("view.reloadOrigin")
-                Button("Reading Mode") { browser.toggleReader() }
-                    .shortcut("view.reader")
-                Button("Float Video") { browser.toggleFloat() }
-                    .shortcut("view.float")
+                // Reading mode, the floating video, AI and hiding things are
+                // WebKit's: they work through scripts in its page, and are
+                // left out of the menus in Chromium mode.
+                if WebEngine.isWebKit {
+                    Button("Reading Mode") { browser.toggleReader() }
+                        .shortcut("view.reader")
+                    Button("Float Video") { browser.toggleFloat() }
+                        .shortcut("view.float")
+                }
                 // The AI add-on's, only once it is on (Settings › AI).
-                if browser.prefs.ai {
+                if browser.prefs.ai, WebEngine.isWebKit {
                     Divider()
                     Button("Summarize Page") { browser.summarizePage() }
                         .shortcut("view.summarize")
@@ -127,11 +143,13 @@ struct SearchApp: App {
                         .shortcut("view.ask")
                         .disabled(browser.active?.isBlank ?? true)
                 }
-                Divider()
-                Button("Hide Elements…") { browser.toggleHiding() }
-                    .shortcut("view.hide")
-                Button("Hidden on This Site…") { browser.reviewing.toggle() }
-                    .shortcut("view.hidden")
+                if WebEngine.isWebKit {
+                    Divider()
+                    Button("Hide Elements…") { browser.toggleHiding() }
+                        .shortcut("view.hide")
+                    Button("Hidden on This Site…") { browser.reviewing.toggle() }
+                        .shortcut("view.hidden")
+                }
                 Divider()
                 Button("Zoom In") { browser.zoom(by: 1.1) }
                     .shortcut("view.zoomIn")
@@ -280,6 +298,19 @@ struct SearchApp: App {
                     .shortcut("app.welcome")
                 Button("Passwords…") { browser.managing = true }
                     .shortcut("app.passwords")
+                Divider()
+                // The other engine, as Settings › Engine switches to it: at
+                // once when it is there to switch to, and otherwise that page,
+                // where its add-on is downloaded.
+                let other = WebEngine.current.other
+                Button("Switch to \(other.title)…") {
+                    if WebEngine.ready(other) {
+                        WebEngine.relaunch(into: other)
+                    } else {
+                        Store.settings.set(SettingsPanel.Page.engine.rawValue, forKey: "settings.page")
+                        browser.tuning = true
+                    }
+                }
             }
             CommandGroup(replacing: .help) {
                 Button("Send Feedback…") { Links.writeFeedback() }
@@ -699,11 +730,14 @@ struct ContentView: View {
     private func handBack() {
         guard !browser.fieldShowing, browser.editingTab == nil else { return }
         DispatchQueue.main.async {
-            guard !browser.fieldShowing, browser.editingTab == nil else { return }
-            guard let web = browser.active?.web, let window = web.window else { return }
+            guard !browser.fieldShowing, browser.editingTab == nil, let tab = browser.active else { return }
+            // WebKit's view, built if need be, as it always was; a Chromium
+            // page only if there is one, since a blank tab has none yet.
+            let page: NSView? = WebEngine.isWebKit ? tab.web : tab.page?.view
+            guard let page, let window = page.window else { return }
             if let responder = window.firstResponder as? NSView,
-               responder === web || responder.isDescendant(of: web) { return }
-            window.makeFirstResponder(web)
+               responder === page || responder.isDescendant(of: page) { return }
+            window.makeFirstResponder(page)
         }
     }
 
@@ -1039,7 +1073,7 @@ struct ContentView: View {
             || (key == "z" && browser.veiling)
             || (key == "k" && !shifted)
             || (!shifted && (event.keyCode == 123 || event.keyCode == 124) && !caretIn(event))
-        guard !reserved, event.window?.firstResponder is PageView else { return false }
+        guard !reserved, pageHasKeys(event.window) else { return false }
         if let passed = ContentView.passed, PageView.same(passed, event) {
             ContentView.passed = nil
             return false
@@ -1055,7 +1089,33 @@ struct ContentView: View {
     /// context while the caret is in something editable, in any frame.
     private func caretIn(_ event: NSEvent) -> Bool {
         event.window?.firstResponder is NSTextView || browser.active?.typing == true
-            || browser.active?.built?.inputContext != nil
+            || browser.active?.built?.inputContext != nil || chromiumTakesText(event.window)
+    }
+
+    /// Whether the keyboard is a page's: WebKit's view has it, or in
+    /// Chromium mode a view inside one of the pages on screen does —
+    /// Chromium's own, which takes the keys in place of the page view.
+    private func pageHasKeys(_ window: NSWindow?) -> Bool {
+        guard let responder = window?.firstResponder else { return false }
+        if responder is PageView { return true }
+        return chromiumPage(holding: responder) != nil
+    }
+
+    /// The Chromium page on screen whose view holds `responder`, if any.
+    private func chromiumPage(holding responder: NSResponder) -> NSView? {
+        guard !WebEngine.isWebKit, let view = responder as? NSView else { return nil }
+        for tab in browser.tabs where browser.visibleTabIDs.contains(tab.id) {
+            if let page = tab.page?.view, view === page || view.isDescendant(of: page) { return page }
+        }
+        return nil
+    }
+
+    /// The caret in something editable on a Chromium page: Chromium's view
+    /// answers as WebKit's does, with an input context only while the caret
+    /// is somewhere that takes text, in any frame.
+    private func chromiumTakesText(_ window: NSWindow?) -> Bool {
+        guard let responder = window?.firstResponder as? NSView, chromiumPage(holding: responder) != nil else { return false }
+        return responder.inputContext != nil
     }
 
     /// Whether the caret is in the window's address field: its field editor
@@ -1258,6 +1318,7 @@ struct ContentView: View {
             if let command = ShortcutStore.shared.changedCommand(on: combo) {
                 if Command.split.contains(command.id), !browser.prefs.splitView { return false }
                 if Command.ai.contains(command.id), !browser.prefs.ai { return false }
+                if Command.webKitOnly.contains(command.id), !WebEngine.isWebKit { return false }
                 command.run(browser)
                 return true
             }
@@ -1267,7 +1328,7 @@ struct ContentView: View {
         // A shortcut an extension registered — ⌥⇧D, ⌃⇧Y — before ours, since
         // none of ours use those. Never one of ours, nor one of the Mac's:
         // those an extension doesn't get (see ShortcutStore.adopt).
-        if #available(macOS 15.4, *), !flags.intersection([.command, .option, .control]).isEmpty,
+        if #available(macOS 15.4, *), WebEngine.isWebKit, !flags.intersection([.command, .option, .control]).isEmpty,
            KeyCombo(event: event).map({ !ShortcutStore.shared.keepsFromExtensions($0) }) ?? true,
            Extensions.shared.take(event) {
             return true
@@ -1348,6 +1409,7 @@ struct ContentView: View {
             // something editable, in any frame — including frames the page's
             // own script can't look into, like the one a Google Doc types in.
             if browser.active?.typing == true || browser.active?.built?.inputContext != nil
+                || chromiumTakesText(event.window)
                 || browser.editing || event.window?.firstResponder is NSTextView {
                 _ = event.window?.firstResponder?.tryToPerform(#selector(NSTextView.pasteAsPlainText(_:)), with: nil)
             } else {
@@ -1355,13 +1417,18 @@ struct ContentView: View {
             }
         case "p" where !shifted:
             browser.printPage()
+        // Finding, floating, hiding and reading mode are WebKit's: in
+        // Chromium mode their keys go on to the page.
         case "f" where !shifted:
+            guard WebEngine.isWebKit else { return false }
             browser.openFind()
         case "g":
+            guard WebEngine.isWebKit else { return false }
             browser.look(forward: !shifted)
         case "m" where shifted:
             browser.pauseMedia()
         case "p" where shifted:
+            guard WebEngine.isWebKit else { return false }
             browser.toggleFloat()
         case "k" where !shifted:
             // Held down, ⌘K walks the list a step at a time; letting go of ⌘
@@ -1381,8 +1448,10 @@ struct ContentView: View {
         case "," where !shifted:
             browser.tuning.toggle()
         case "h" where shifted:
+            guard WebEngine.isWebKit else { return false }
             browser.toggleHiding()
         case "u" where shifted:
+            guard WebEngine.isWebKit else { return false }
             browser.reviewing.toggle()
         case "z" where !shifted:
             // Only while pointing. Everywhere else undo belongs to the page.
@@ -1402,6 +1471,7 @@ struct ContentView: View {
         case "r" where !shifted:
             browser.reload()
         case "r" where shifted:
+            guard WebEngine.isWebKit else { return false }
             browser.toggleReader()
         case "[":
             shifted ? browser.step(-1) : browser.back()

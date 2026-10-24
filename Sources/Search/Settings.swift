@@ -17,7 +17,7 @@ struct SettingsPanel: View {
     @State private var page: Page = Page(rawValue: Store.settings.string(forKey: "settings.page") ?? "") ?? .general
 
     enum Page: String, CaseIterable, Identifiable {
-        case general, tabs, shortcuts, extensions, passwords, downloads, privacy, ai, about
+        case general, tabs, shortcuts, extensions, passwords, downloads, privacy, ai, engine, about
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -29,6 +29,7 @@ struct SettingsPanel: View {
             case .downloads: return "Downloads"
             case .privacy: return "Privacy"
             case .ai: return "AI"
+            case .engine: return "Engine"
             case .about: return "About"
             }
         }
@@ -42,10 +43,27 @@ struct SettingsPanel: View {
             case .downloads: return "arrow.down.circle"
             case .privacy: return "hand.raised"
             case .ai: return "sparkles"
+            case .engine: return "cpu"
             case .about: return "info.circle"
             }
         }
+
+        /// The pages this process has: AI only once it ships, and neither
+        /// it nor Extensions in Chromium mode, where both are WebKit's.
+        @MainActor static var offered: [Page] {
+            allCases.filter { page in
+                switch page {
+                case .ai: return AI.shipped && WebEngine.isWebKit
+                case .extensions: return WebEngine.isWebKit
+                default: return true
+                }
+            }
+        }
     }
+
+    /// The page on screen: the one last open, unless this process doesn't
+    /// have it (see Page.offered).
+    private var showing: Page { Page.offered.contains(page) ? page : .general }
 
     private static let rail: CGFloat = 168
     private static let width: CGFloat = 660
@@ -78,8 +96,8 @@ struct SettingsPanel: View {
                 .padding(.horizontal, 10)
                 .padding(.top, 14)
                 .padding(.bottom, 12)
-            ForEach(Page.allCases.filter { $0 != .ai || AI.shipped }) { item in
-                PageRow(page: item, on: page == item) { page = item }
+            ForEach(Page.offered) { item in
+                PageRow(page: item, on: showing == item) { page = item }
             }
             Spacer(minLength: 0)
         }
@@ -126,7 +144,7 @@ struct SettingsPanel: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(page.title)
+                Text(showing.title)
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Palette.ink)
                 Spacer()
@@ -136,7 +154,7 @@ struct SettingsPanel: View {
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
-                    switch page {
+                    switch showing {
                     case .general: general
                     case .tabs:
                         tabs
@@ -147,6 +165,7 @@ struct SettingsPanel: View {
                     case .downloads: downloads
                     case .privacy: privacy
                     case .ai: if AI.shipped { AISettings(browser: browser, prefs: prefs) }
+                    case .engine: EngineSettings(browser: browser)
                     case .about: about
                     }
                 }
@@ -154,7 +173,7 @@ struct SettingsPanel: View {
             }
             // A page of its own opens at its top. One scroll view kept for
             // them all opened Tabs as far down as General had been read.
-            .id(page)
+            .id(showing)
         }
         .padding(.horizontal, 22)
         .padding(.top, 18)
@@ -292,17 +311,22 @@ struct SettingsPanel: View {
                 // The number itself takes it back to 100%.
                 Steps(stops: Preferences.zooms, value: $prefs.pageZoom, home: 1) { "\(Int(($0 * 100).rounded()))%" }
             }
-            Rule()
-            Line("Correct spelling as you type", "macOS's autocorrect inside pages — the one that capitalises for you") {
-                Switch(on: $prefs.autocorrect)
-            }
-            Rule()
-            Line("Peek at a link with a shift-click", "Its page opens in a panel over the one you're reading. Escape puts it away; the other button keeps it as a tab") {
-                Switch(on: $prefs.peeksLinks)
-            }
-            Rule()
-            Line("Open links from other apps in a small window", "To read and close, or keep with Open in Search (⌘O)") {
-                Switch(on: $prefs.littleLinks)
+            // What follows to the next comment is WebKit's: its spelling,
+            // its link menu, its little window. Chromium mode leaves them
+            // out rather than offer switches that do nothing.
+            if WebEngine.isWebKit {
+                Rule()
+                Line("Correct spelling as you type", "macOS's autocorrect inside pages — the one that capitalises for you") {
+                    Switch(on: $prefs.autocorrect)
+                }
+                Rule()
+                Line("Peek at a link with a shift-click", "Its page opens in a panel over the one you're reading. Escape puts it away; the other button keeps it as a tab") {
+                    Switch(on: $prefs.peeksLinks)
+                }
+                Rule()
+                Line("Open links from other apps in a small window", "To read and close, or keep with Open in Search (⌘O)") {
+                    Switch(on: $prefs.littleLinks)
+                }
             }
             Rule()
             Line("Address bar commands", "A word like \"settings\" or \"new tab\", typed alone in the address field, goes there instead of searching for it") {
@@ -312,38 +336,46 @@ struct SettingsPanel: View {
             Line("Show where links go", "Point at a link and its address shows at the bottom of the page") {
                 Switch(on: $prefs.showsLinks)
             }
-            Rule()
-            Line("Scroll with the middle button", "Click the wheel on a page, then move the mouse up or down to scroll, as on Windows. Click again to stop") {
-                Switch(on: $prefs.autoScroll)
-            }
-            Rule()
-            Line("Pages at 120 Hz", "Animations and scrolling in pages at up to 120 frames a second on a screen that can, instead of 60 as in Safari. Uses more battery. Open tabs follow when reloaded") {
-                Switch(on: $prefs.fastPages)
-            }
-            Rule()
-            Line("Hold a swipe to pick from history", "Swipe back or forward and keep your fingers down: the pages that way appear, and moving up or down picks one to go to") {
-                Switch(on: $prefs.holdsHistory)
-            }
-            Rule()
-            Line("Flick the floating video to a corner", "Two fingers on it send it to the corner or edge they point at, instead of pushing it along; a strong swipe at the side of the screen it is against tucks it in there, a sliver left to bring it back by. Dragging still puts it anywhere") {
-                Switch(on: $prefs.floatFlicks)
-            }
-            Rule()
-            Line("Videos wait for a click", "Videos don't start by themselves, even without sound; they play when you press play. Tabs already open follow once closed and opened again, or after they've slept") {
-                Switch(on: $prefs.waitsForPlay)
-            }
-            Rule()
-            Line("Float the video when you switch tabs", "A video playing on YouTube and the like comes out into its floating window when you go to another tab, and back when you return. ⇧⌘P still floats one by hand") {
-                Switch(on: $prefs.floatsOnLeave)
-            }
-            Rule()
-            Line("Float the video when you switch apps", "A video playing on the site you're on comes out into its floating window as another app comes to the front, and goes back into its tab when you return") {
-                Switch(on: $prefs.floatsAway)
-            }
+            if WebEngine.isWebKit { webKitGeneral }
             Rule()
             Line("Let a script drive Search", "A local socket for testing. Its tabs open beside yours with a flask on them and never take over — see ./bench") {
                 Switch(on: $prefs.bench)
             }
+        }
+    }
+
+    /// General's lines that are WebKit's alone: scripts it runs in pages,
+    /// its frame rate, its swipe, its autoplay and the floating video. Not
+    /// shown in Chromium mode, where they would be switches that do nothing.
+    @ViewBuilder
+    private var webKitGeneral: some View {
+        Rule()
+        Line("Scroll with the middle button", "Click the wheel on a page, then move the mouse up or down to scroll, as on Windows. Click again to stop") {
+            Switch(on: $prefs.autoScroll)
+        }
+        Rule()
+        Line("Pages at 120 Hz", "Animations and scrolling in pages at up to 120 frames a second on a screen that can, instead of 60 as in Safari. Uses more battery. Open tabs follow when reloaded") {
+            Switch(on: $prefs.fastPages)
+        }
+        Rule()
+        Line("Hold a swipe to pick from history", "Swipe back or forward and keep your fingers down: the pages that way appear, and moving up or down picks one to go to") {
+            Switch(on: $prefs.holdsHistory)
+        }
+        Rule()
+        Line("Flick the floating video to a corner", "Two fingers on it send it to the corner or edge they point at, instead of pushing it along; a strong swipe at the side of the screen it is against tucks it in there, a sliver left to bring it back by. Dragging still puts it anywhere") {
+            Switch(on: $prefs.floatFlicks)
+        }
+        Rule()
+        Line("Videos wait for a click", "Videos don't start by themselves, even without sound; they play when you press play. Tabs already open follow once closed and opened again, or after they've slept") {
+            Switch(on: $prefs.waitsForPlay)
+        }
+        Rule()
+        Line("Float the video when you switch tabs", "A video playing on YouTube and the like comes out into its floating window when you go to another tab, and back when you return. ⇧⌘P still floats one by hand") {
+            Switch(on: $prefs.floatsOnLeave)
+        }
+        Rule()
+        Line("Float the video when you switch apps", "A video playing on the site you're on comes out into its floating window as another app comes to the front, and goes back into its tab when you return") {
+            Switch(on: $prefs.floatsAway)
         }
     }
 
@@ -420,13 +452,18 @@ struct SettingsPanel: View {
             Line("Show the bookmarks bar", "Your bookmarks in a row above the page, folders opening as menus. It folds away with the tabs") {
                 Switch(on: $prefs.bookmarksBar)
             }
-            Rule()
-            Line("Show how far you've read", "The tab you're on fills with grey as you scroll down the page") {
-                Switch(on: $prefs.showsReading)
-            }
-            Rule()
-            Line("Sleep tabs you aren't using", "After half an hour away they come back where you left them. Pinned tabs, sound, calls and anything typed stay awake.") {
-                Switch(on: $prefs.sleepsTabs)
+            // How far you've read comes from a script in WebKit's page, and
+            // a Chromium page can't say whether it holds something typed,
+            // so its tabs never sleep (see Browser.awake).
+            if WebEngine.isWebKit {
+                Rule()
+                Line("Show how far you've read", "The tab you're on fills with grey as you scroll down the page") {
+                    Switch(on: $prefs.showsReading)
+                }
+                Rule()
+                Line("Sleep tabs you aren't using", "After half an hour away they come back where you left them. Pinned tabs, sound, calls and anything typed stay awake.") {
+                    Switch(on: $prefs.sleepsTabs)
+                }
             }
             Rule()
             Line("Load background tabs when you go to them", "A link opened behind the page, with ⌘-click or the middle button, or a batch of links from another app, waits until you go to its tab. ⇧⌘-click still takes you there at once.") {
@@ -480,24 +517,28 @@ struct SettingsPanel: View {
                         browser.managing = true
                     }
                 }
-                Rule()
-                Line("Offer to save passwords", savingDetail) {
-                    Switch(on: $prefs.savesPasswords)
-                }
-                Rule()
-                Line("Fill in sign-ins", "Click a sign-in box and the accounts kept for the site hang from it") {
-                    Switch(on: $prefs.fillsPasswords)
-                }
-                Rule()
-                Line(
-                    "Offer passkeys",
-                    !prefs.passkeysPossible
-                        ? "Needs an Apple entitlement this build doesn't have — off keeps sites to the password"
-                        : Passkeys.access == .denied
-                        ? "macOS was told no — System Settings › Privacy & Security › Passkeys Access for Web Browsers"
-                        : "Touch ID or an iCloud passkey, on sites that offer one"
-                ) {
-                    Switch(on: $prefs.passkeys)
+                // Saving, filling and passkeys work through scripts in
+                // WebKit's page; the keychain above is the same in both.
+                if WebEngine.isWebKit {
+                    Rule()
+                    Line("Offer to save passwords", savingDetail) {
+                        Switch(on: $prefs.savesPasswords)
+                    }
+                    Rule()
+                    Line("Fill in sign-ins", "Click a sign-in box and the accounts kept for the site hang from it") {
+                        Switch(on: $prefs.fillsPasswords)
+                    }
+                    Rule()
+                    Line(
+                        "Offer passkeys",
+                        !prefs.passkeysPossible
+                            ? "Needs an Apple entitlement this build doesn't have — off keeps sites to the password"
+                            : Passkeys.access == .denied
+                            ? "macOS was told no — System Settings › Privacy & Security › Passkeys Access for Web Browsers"
+                            : "Touch ID or an iCloud passkey, on sites that offer one"
+                    ) {
+                        Switch(on: $prefs.passkeys)
+                    }
                 }
                 if !Vault.never.isEmpty {
                     Rule()
@@ -542,55 +583,65 @@ struct SettingsPanel: View {
 
     private var privacy: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Card {
-                Line("Block ads and trackers", shield.trouble ?? "Third parties whose only job is to watch") {
-                    Switch(on: $prefs.shielded)
-                }
-                if let trouble = shield.trouble {
-                    Rule()
-                    Line(trouble, "Nothing is being blocked until this clears — try again, or restart Search") {
-                        Pill("Try again") { shield.compile() }
-                    }
-                }
-                if let host = browser.hereHost, prefs.shielded, shield.trouble == nil {
-                    Rule()
-                    Line("Block on \(host)", "Turn off here if the site breaks — the page reloads") {
-                        Switch(on: Binding(
-                            get: { !Shield.shared.isPaused(on: host) },
-                            set: { on in
-                                Shield.shared.pause(host, !on)
-                                browser.reload()
-                            }
-                        ))
-                    }
-                }
-                Rule()
-                Line("Prevent cross-site tracking", "As in Safari. Off, sites you rarely open keep their sign-ins, and trackers inside other sites can follow you across them again, as in Chrome. Private tabs keep it on") {
-                    Switch(on: Binding(get: { !prefs.keepsSignIns }, set: { prefs.keepsSignIns = !$0 }))
-                }
-                Rule()
-                Line("Camera, microphone, location and notifications", "What each site was allowed or refused, and the sites whose videos don't float") {
-                    Pill("Forget choices") { browser.forgetCaptureChoices() }
-                }
-                Rule()
-                Line("Let sites ask to send notifications", "A site asks on a card over its page, and only one you allow reaches your Mac's notifications. Private tabs are never asked") {
-                    Switch(on: $prefs.siteNotifications)
-                }
-                NotificationSites()
-            }
+            // The blocker, tracking prevention, the choices sites were given
+            // and their notifications are WebKit's, and so, until Chromium's
+            // profiles can be emptied, is clearing cookies and the cache.
+            if WebEngine.isWebKit { webKitPrivacy }
             Card {
                 Line("History", "Every address you have been to") {
                     Pill("Clear") { browser.clearHistory() }
                 }
-                Rule()
-                Line("Cookies and sign-ins", "Signs you out of every site") {
-                    Pill("Sign out of everything") { browser.clearSites() }
-                }
-                Rule()
-                Line("Cache", "Only what was fetched to draw pages") {
-                    Pill("Clear") { browser.clearCache() }
+                if WebEngine.isWebKit {
+                    Rule()
+                    Line("Cookies and sign-ins", "Signs you out of every site") {
+                        Pill("Sign out of everything") { browser.clearSites() }
+                    }
+                    Rule()
+                    Line("Cache", "Only what was fetched to draw pages") {
+                        Pill("Clear") { browser.clearCache() }
+                    }
                 }
             }
+        }
+    }
+
+    /// Privacy's card that is WebKit's alone (see privacy).
+    private var webKitPrivacy: some View {
+        Card {
+            Line("Block ads and trackers", shield.trouble ?? "Third parties whose only job is to watch") {
+                Switch(on: $prefs.shielded)
+            }
+            if let trouble = shield.trouble {
+                Rule()
+                Line(trouble, "Nothing is being blocked until this clears — try again, or restart Search") {
+                    Pill("Try again") { shield.compile() }
+                }
+            }
+            if let host = browser.hereHost, prefs.shielded, shield.trouble == nil {
+                Rule()
+                Line("Block on \(host)", "Turn off here if the site breaks — the page reloads") {
+                    Switch(on: Binding(
+                        get: { !Shield.shared.isPaused(on: host) },
+                        set: { on in
+                            Shield.shared.pause(host, !on)
+                            browser.reload()
+                        }
+                    ))
+                }
+            }
+            Rule()
+            Line("Prevent cross-site tracking", "As in Safari. Off, sites you rarely open keep their sign-ins, and trackers inside other sites can follow you across them again, as in Chrome. Private tabs keep it on") {
+                Switch(on: Binding(get: { !prefs.keepsSignIns }, set: { prefs.keepsSignIns = !$0 }))
+            }
+            Rule()
+            Line("Camera, microphone, location and notifications", "What each site was allowed or refused, and the sites whose videos don't float") {
+                Pill("Forget choices") { browser.forgetCaptureChoices() }
+            }
+            Rule()
+            Line("Let sites ask to send notifications", "A site asks on a card over its page, and only one you allow reaches your Mac's notifications. Private tabs are never asked") {
+                Switch(on: $prefs.siteNotifications)
+            }
+            NotificationSites()
         }
     }
 
@@ -647,12 +698,14 @@ struct SettingsPanel: View {
                 Rule()
                 Shortcut("⌘S", "Fold the sidebar away")
                 Rule()
-                Shortcut("⇧⌘R", "Reading mode")
-                Rule()
-                Shortcut("⇧⌘H", "Hide something on this site")
-                Rule()
-                Shortcut("⇧⌘P", "Float the video")
-                Rule()
+                if WebEngine.isWebKit {
+                    Shortcut("⇧⌘R", "Reading mode")
+                    Rule()
+                    Shortcut("⇧⌘H", "Hide something on this site")
+                    Rule()
+                    Shortcut("⇧⌘P", "Float the video")
+                    Rule()
+                }
                 Shortcut("⇧⌘⌫", "Clear browsing data")
             }
         }

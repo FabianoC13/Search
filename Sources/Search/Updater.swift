@@ -339,6 +339,18 @@ final class Updater: ObservableObject {
                 AIEngine.shared.refreshState()
             }
         }
+        // Chromium's add-on, when the feed offers one (see ChromiumAddon):
+        // checked as the AI engine's is, against a cap of its own — the
+        // framework and its helpers come to a few hundred megabytes.
+        if let chromium = json["chromium"] as? [String: Any],
+           let version = (chromium["version"] as? String) ?? (chromium["version"] as? NSNumber)?.stringValue,
+           !version.isEmpty,
+           let url = link(chromium["url"]), url.scheme?.lowercased() == "https",
+           let sha = (chromium["sha256"] as? String)?.lowercased(), sha.count == 64, sha.allSatisfy(\.isHexDigit),
+           let size = (chromium["size"] as? NSNumber)?.int64Value, size > 0, size < 512 << 20 {
+            let offer = ChromiumAddon.Offer(version: version, url: url, sha256: sha, size: size)
+            await MainActor.run { ChromiumAddon.shared.offered = offer }
+        }
         return release
     }
 
