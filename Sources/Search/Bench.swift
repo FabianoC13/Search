@@ -326,6 +326,21 @@ final class Bench {
                 "untouched": Census.untouched,
             ])
 
+        case "nav":
+            // Back, Forward, Reload or Stop on a tab, as the buttons do them:
+            // through the tab to its page, whichever engine draws it.
+            guard let tab = find(request, in: browser) else { answer(missing(request)); return }
+            switch request["action"] as? String ?? "" {
+            case "back": tab.back()
+            case "forward": tab.forward()
+            case "reload": tab.reload()
+            case "stop": tab.stop()
+            default:
+                answer(["error": "nav needs back, forward, reload or stop"])
+                return
+            }
+            answer(describe(tab))
+
         case "tabs":
             // A private tab is nobody's business but yours: a test run has none
             // of yours, so there every tab is listed.
@@ -1256,7 +1271,7 @@ final class Bench {
                 menus[item.title] = menu.items.filter { !$0.isSeparatorItem && !$0.isHidden }.map(\.title)
             }
             answer(["menus": menus, "ai": browser.prefs.ai, "shipped": AI.shipped,
-                    "settingsPages": SettingsPanel.Page.allCases.filter { $0 != .ai || AI.shipped }.map(\.rawValue),
+                    "settingsPages": SettingsPanel.Page.offered.map(\.rawValue),
                     "settingsPage": browser.settingsPage.rawValue])
 
         case "menu":
@@ -2466,7 +2481,7 @@ final class Bench {
 
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
-                "engine", "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "float", "window", "pages", "picture", "place", "group", "tospace", "field", "bookmark", "menu", "keyeq", "fill", "pin", "middle", "windows", "quit", "towindow", "news", "pull", "space", "split", "strip", "column", "fold", "consent", "update", "site", "little", "ui", "import", "import-preview", "import-file", "import-file-start", "import-file-status", "import-file-cancel", "remove-folder", "accounts", "find", "answer", "visible", "ai", "notifications",
+                "engine", "nav", "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "float", "window", "pages", "picture", "place", "group", "tospace", "field", "bookmark", "menu", "keyeq", "fill", "pin", "middle", "windows", "quit", "towindow", "news", "pull", "space", "split", "strip", "column", "fold", "consent", "update", "site", "little", "ui", "import", "import-preview", "import-file", "import-file-start", "import-file-status", "import-file-cancel", "remove-folder", "accounts", "find", "answer", "visible", "ai", "notifications",
             ]])
         }
     }
