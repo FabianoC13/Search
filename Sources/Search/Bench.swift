@@ -2424,7 +2424,10 @@ final class Bench {
 
         case "ui":
             // Open or close the app's own panels, to reproduce what a person
-            // did without a person.
+            // did without a person. `page`: the Settings page it opens on.
+            if let page = (request["page"] as? String).flatMap(SettingsPanel.Page.init(rawValue:)) {
+                browser.settingsPage = page
+            }
             if let on = request["settings"] as? Bool { browser.tuning = on }
             if let on = request["passwords"] as? Bool, Store.testing { browser.managing = on }
             if let on = request["welcome"] as? Bool { browser.welcoming = on }
@@ -3139,8 +3142,11 @@ final class Bench {
     }
 
     /// The commands only WebKit can answer (see the refusal in handle).
+    /// Not `picture`: it draws the window, and pictures only the WebKit
+    /// pages it finds there — none in Chromium mode, where the chrome is
+    /// still worth a picture.
     static let webKitOnly: Set<String> = [
-        "text", "eval", "tap", "click", "type", "submit", "middle", "linkmenu", "key", "shot", "picture",
+        "text", "eval", "tap", "click", "type", "submit", "middle", "linkmenu", "key", "shot",
         "film", "float", "find", "ai", "extensions", "capture", "capture-stop",
     ]
 
