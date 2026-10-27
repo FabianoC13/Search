@@ -1,0 +1,14 @@
+{
+  "name": "search-playwright",
+  "private": true,
+  "description": "Search's Chromium mode, driven by Playwright the way Playwright drives Chrome (see PLAYWRIGHT_PLAN.md).",
+  "scripts": {
+    "attach": "SEARCH_MODE=attach playwright test",
+    "launch": "SEARCH_MODE=launch playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

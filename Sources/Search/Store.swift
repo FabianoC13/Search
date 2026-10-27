@@ -115,6 +115,12 @@ enum Store {
     /// — moves to the new name the first time the new name runs, and the
     /// settings are copied across. Nothing is left to be lost.
     static let folder: URL = {
+        // Started by Playwright for a run (Launch.swift): its own folder,
+        // never yours.
+        if Launch.active, let launched = Launch.userDataDir {
+            try? FileManager.default.createDirectory(at: launched, withIntermediateDirectories: true)
+            return launched
+        }
         let support = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let home = support.appendingPathComponent(world.map { "Search (\($0))" } ?? (beta ? "Search Beta" : "Search"),
@@ -150,6 +156,14 @@ enum Store {
     /// Settings live apart too: a test that changes what the tabs wear or
     /// where the tabs go must not change yours.
     static let settings: UserDefaults = {
+        // A run Playwright started keeps its settings in its own folder,
+        // and they go with it.
+        if Launch.active, let launched = Launch.userDataDir {
+            let file = launched.appendingPathComponent("Settings").path
+            return UserDefaults(suiteName: file)
+                ?? UserDefaults(suiteName: "com.officecommun.search.launch.\(abs(file.hashValue))")
+                ?? .standard
+        }
         guard testing else {
             carryOver(into: .standard)
             return .standard

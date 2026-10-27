@@ -460,6 +460,8 @@ final class Tab: ObservableObject, Identifiable {
     }
 
     func applyRememberedZoom() {
+        // A tool drives the page at 100%, which its coordinates assume.
+        guard !driven else { return holdZoom() }
         guard let host = address?.host() else { return }
         let kept = (Store.settings.object(forKey: "zoom." + host) as? Double).map { CGFloat($0) }
             ?? Tab.defaultZoom
@@ -467,6 +469,14 @@ final class Tab: ObservableObject, Identifiable {
         guard abs(kept - page.pageZoom) > 0.004 else { return }
         page.pageZoom = kept
         zoom = kept
+    }
+
+    /// At 100% for a tool, whatever the site is kept at, without forgetting
+    /// that (see Automation).
+    func holdZoom() {
+        guard let page, abs(page.pageZoom - 1) > 0.004 else { return }
+        page.pageZoom = 1
+        zoom = 1
     }
 
     /// How much bigger the page is being drawn. Not a magnifying glass over
@@ -556,6 +566,17 @@ final class Tab: ObservableObject, Identifiable {
     /// The tab whose page opened this one, when a script did. Sign-in flows
     /// hand you back to it when they are done.
     var opener: Tab.ID?
+
+    /// A tab a tool opened over DevTools (see Automation): never in the
+    /// session or the history, like the bench's.
+    var automated = false
+    /// A tool is driving its page now (see Automation): marked in the row.
+    @Published var driven = false
+    /// Its page's DevTools target, as tools name it, once the page has said.
+    private(set) var targetID: String?
+    /// For a tab of a context a tool made (browser.newContext()): that
+    /// context's id, as tools know it.
+    var toolContext: String?
 
     /// A window a page opened at a size of its own, or without a toolbar:
     /// a pop-up, not a link. It is named by its site, never by its title — a
@@ -647,6 +668,16 @@ final class Tab: ObservableObject, Identifiable {
     private func chromium(_ url: URL?) -> any PageEngine {
         let profile: ChromiumProfile = shy ? .ephemeral(kin) : Spaces.profile(for: host?.space(of: self) ?? Spaces.current)
         let made = ChromiumPage(url: url, profile: profile, sink: self)
+        if muted { made.setMuted(true) }
+        page = made
+        self.profile = profile
+        return made
+    }
+
+    /// A page for a popup this tab's page opens, which Chromium makes
+    /// itself with this tab's profile (see Browser.tabWantsPopup).
+    func openPopup(profile: ChromiumProfile) -> ChromiumPage {
+        let made = ChromiumPage(popupOf: profile, sink: self)
         if muted { made.setMuted(true) }
         page = made
         self.profile = profile
@@ -1489,6 +1520,15 @@ protocol TabHost: AnyObject {
     func tabWantsClose(_ tab: Tab)
     /// A download finished at `file`.
     func tabDownloaded(_ tab: Tab, file: URL, from source: URL?)
+    /// A question from the page (CHROMIUM_DIALOG_*): true when it is asked.
+    func tabAsks(_ tab: Tab, kind: Int, origin: String, message: String, text: String, reload: Bool) -> Bool
+    /// The page's question was answered elsewhere.
+    func tabQuestionGone(_ tab: Tab)
+    /// A popup from the page (CHROMIUM_POPUP_*): the page made for it.
+    func tabWantsPopup(_ tab: Tab, url: URL?, kind: Int) -> ChromiumPage?
+    /// A permission the page asks for: 2 when asked, -1 for Chromium's own
+    /// answer (see PageEventSink.pagePermission).
+    func tabAsksPermission(_ tab: Tab, origin: String, media: Bool, kinds: UInt32) -> Int32
     /// The space the tab is in, for the profile its next page signs in with.
     func space(of tab: Tab) -> UUID
     /// Where the window's downloads land: its space's folder, or Settings'.
@@ -1554,6 +1594,26 @@ extension Tab: PageEventSink {
     func pageTouched() {
         uncover()
         onKeys?(self)
+    }
+
+    func pageTarget(_ target: String, context: String, browser: Int32) {
+        targetID = target
+        Automation.shared.register(self, target: target, context: context, browser: browser)
+    }
+
+    func pageAsks(_ kind: Int, origin: String, message: String, text: String, reload: Bool) -> Bool {
+        host?.tabAsks(self, kind: kind, origin: origin, message: message, text: text, reload: reload) ?? false
+    }
+
+    func pageQuestionGone() { host?.tabQuestionGone(self) }
+
+    func pageWantsPopup(_ url: URL?, kind: Int) -> ChromiumPage? { host?.tabWantsPopup(self, url: url, kind: kind) }
+
+    func pagePermission(origin: String, media: Bool, kinds: UInt32) -> Int32 {
+        // What a tool granted first; asked of you otherwise.
+        let granted = Automation.shared.permits(self, origin: origin, media: media, kinds: kinds)
+        guard granted < 0 else { return granted }
+        return host?.tabAsksPermission(self, origin: origin, media: media, kinds: kinds) ?? -1
     }
 
     /// Chromium has had a page up in this process.

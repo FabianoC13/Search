@@ -65,11 +65,22 @@ void glue_register(cef_browser_t *browser);
 void glue_unregister(cef_browser_t *browser);
 
 /// The client of browsers Chromium makes for itself: popups that asked for
-/// a window of their own, and DevTools.
+/// a window of their own, DevTools, and windows a tool's own contexts open.
 cef_client_t *glue_loose_client(void);
 
+/// A tool is driving pages (chromium_set_automation).
+int glue_automation(void);
+/// Seconds since real input of a kind (chromium_real_input_age).
+double glue_real_age(int kind);
+/// Whether a key event Chromium hands back is one AppKit delivered, not
+/// one a tool sent: the event the app last saw, compared by its stamp.
+int glue_real_key(void *os_event);
+
+/// The hooks chromium_set_downloads gave, if any.
+const chromium_downloads *glue_downloads(void);
+
 /// Downloads, the same for every browser: straight into Downloads, under a
-/// name nothing else has.
+/// name nothing else has — or where chromium_downloads says.
 int glue_can_download(struct _cef_download_handler_t *self, cef_browser_t *browser,
                       const cef_string_t *url, const cef_string_t *method);
 int glue_before_download(struct _cef_download_handler_t *self, cef_browser_t *browser,

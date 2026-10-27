@@ -60,7 +60,22 @@ enum ChromiumRuntime {
             return .failed(String(cString: error))
         }
 
-        port = requested()
+        // Who drives it. Tools you let in (Settings › Engine, or
+        // --remote-debugging-port): Search listens on the port asked for (see
+        // DevToolsBridge). Or Playwright, which started Search for a run
+        // (Launch.swift): a pipe, or a port it named. Chromium's own server
+        // goes on a port nothing else has, which only the bridge talks to.
+        var inner = 0
+        if Launch.active {
+            inner = freePort()
+            port = Launch.port.map { $0 > 0 ? $0 : freePort() } ?? 0
+        } else {
+            port = requested()
+            inner = port > 0 ? freePort() : 0
+        }
+        // Playwright's switches: as it gave them in launch mode; with your own
+        // profile, only those that touch nothing of yours (PlaywrightSwitches).
+        let switches = Launch.active ? Launch.switches : port > 0 ? PlaywrightSwitches.attach : []
         var kept: [UnsafeMutablePointer<CChar>] = []
         defer { kept.forEach { free($0) } }
         func text(_ string: String?) -> UnsafePointer<CChar>? {
@@ -82,17 +97,26 @@ enum ChromiumRuntime {
         let name = Store.beta ? "Search Beta Chromium" : "Search Chromium"
         options.keychain_service = text("\(name) Safe Storage")
         options.keychain_account = text(name)
-        // Chromium's own server is one port up; the port asked for is the
-        // bridge's (DevToolsBridge), so a tool's new pages are Search's tabs.
-        options.port = Int32(port > 0 ? port + 1 : 0)
+        // Chromium's own server, which only the bridge talks to: the port
+        // asked for is the bridge's, so a tool's new pages are Search's tabs.
+        options.port = Int32(inner)
         options.mock_keychain = Store.testing ? 1 : 0
-        guard chromium_start(&options, &error, error.count) == 1 else {
+        let given: [UnsafePointer<CChar>?] = switches.map { text($0) }
+        let started = given.withUnsafeBufferPointer { list -> Int32 in
+            options.switches = list.baseAddress
+            options.switch_count = Int32(list.count)
+            return chromium_start(&options, &error, error.count)
+        }
+        guard started == 1 else {
             Store.settings.removeObject(forKey: WebEngine.startingKey)
             port = 0
             return .failed(String(cString: error))
         }
         running = true
-        if port > 0 { DevToolsBridge.shared.start(outer: port, inner: port + 1) }
+        if inner > 0 {
+            DevToolsBridge.shared.start(outer: port, inner: inner)
+            if Launch.pipe { DevToolsBridge.shared.startPipe() }
+        }
         // A launch with no page to show still counts as started once it has
         // run a while without falling over.
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) { settle() }
@@ -123,8 +147,53 @@ enum ChromiumRuntime {
         Store.settings.removeObject(forKey: WebEngine.startingKey)
     }
 
-    /// Only ports nothing system-wide needs, and only on 127.0.0.1, which
-    /// is all Chromium listens on. Chromium takes the one above it.
+    /// A port nothing on this Mac listens on, as the system hands one out.
+    static func freePort() -> Int {
+        let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard socket >= 0 else { return 0 }
+        defer { Darwin.close(socket) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafeMutablePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { named in
+                Darwin.bind(socket, named, length) == 0 && getsockname(socket, named, &length) == 0
+            }
+        }
+        return bound ? Int(UInt16(bigEndian: address.sin_port)) : 0
+    }
+
+    /// A proxy for every page of a tool's context (Target.createBrowserContext).
+    static func setProxy(_ server: String, bypass: String?, for profile: ChromiumProfile) {
+        guard let context = context(for: profile) else { return }
+        _ = server.withCString { serverText in
+            if let bypass {
+                return bypass.withCString { chromium_context_set_proxy(context, serverText, $0) }
+            }
+            return chromium_context_set_proxy(context, serverText, nil)
+        }
+        // Held for its pages to come; let go of as a page of it is.
+        release(profile)
+    }
+
+    /// What a tool granted an origin in a context of its own
+    /// (Automation.grant), kept as the site's settings there; nil puts them
+    /// back to the default.
+    static func setPermissions(_ names: [String]?, origin: String, for profile: ChromiumProfile) {
+        guard let context = context(for: profile) else { return }
+        defer { release(profile) }
+        guard let names else { return chromium_context_set_permissions(context, origin, nil, 0) }
+        let copies = names.map { strdup($0) }
+        defer { copies.forEach { free($0) } }
+        let pointers = copies.map { $0.map { UnsafePointer($0) } }
+        pointers.withUnsafeBufferPointer { chromium_context_set_permissions(context, origin, $0.baseAddress, Int32($0.count)) }
+    }
+
+    /// The port asked for: only one nothing system-wide needs, and only on
+    /// 127.0.0.1.
     private static func requested() -> Int {
         let flag = "--remote-debugging-port="
         let asked = ProcessInfo.processInfo.arguments.last { $0.hasPrefix(flag) }

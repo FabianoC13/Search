@@ -104,6 +104,11 @@ final class Links: NSObject, NSApplicationDelegate {
         // in the middle of it — a Safari export's passwords in the clear
         // among it — goes (Security).
         DispatchQueue.global(qos: .utility).async { ImportFile.sweepScratch() }
+        // Started by Playwright (Launch.swift): its first page, or none.
+        if Launch.active {
+            MainActor.assumeIsolated { Links.startForPlaywright() }
+            return
+        }
         let plain = notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool ?? true
         guard !plain else { return }
         DispatchQueue.main.async {
@@ -112,10 +117,30 @@ final class Links: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// launchPersistentContext asks for about:blank, its context's first
+    /// page; chromium.launch for no window at all — its pages come in
+    /// contexts of their own, each a window.
+    @MainActor
+    private static func startForPlaywright(tries: Int = 0) {
+        let browser = SceneSlot.shared.browser
+        guard let window = browser.window else {
+            // The scene's window comes a moment after launch.
+            guard tries < 50 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { startForPlaywright(tries: tries + 1) }
+            return
+        }
+        if let url = Launch.startURL {
+            browser.arrive(url)
+        } else if Launch.noStartupWindow {
+            window.orderOut(nil)
+        }
+    }
+
     @objc private func handle(getURL event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         // A test run takes nothing from outside it: an address from another
         // app would bring a window forward. The bench hands links in itself.
-        guard !Store.testing else { return }
+        // Nor does a run Playwright started.
+        guard !Store.testing, !Launch.active else { return }
         guard let text = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
               let url = URL(string: text), url.scheme?.lowercased().hasPrefix("http") == true
         else { return }
@@ -127,7 +152,9 @@ final class Links: NSObject, NSApplicationDelegate {
     /// once Search is the Mac's browser (it says it can open them, see
     /// build.sh), which this used to drop without a word.
     func application(_ application: NSApplication, open urls: [URL]) {
-        guard !Store.testing else { return }
+        // Nor does a run Playwright started: what its command line ends with
+        // is its first page (Launch.startURL), not a file to open.
+        guard !Store.testing, !Launch.active else { return }
         for url in urls where url.isFileURL || url.scheme?.lowercased().hasPrefix("http") == true {
             Links.take(url)
         }

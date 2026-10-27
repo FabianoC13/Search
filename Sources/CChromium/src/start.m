@@ -76,7 +76,69 @@ static void set_handling_send_event(id self, SEL command, BOOL value) {
     sending = value;
 }
 
+// MARK: - Real input
+
+// What AppKit delivered last, of each kind: the person's own input. What a
+// tool sends over DevTools goes straight to the page and never passes here,
+// so a menu or a panel that opens with none of this just before it was
+// opened by a tool (see chromium_set_automation).
+static CFAbsoluteTime real_mouse = -1e9, real_right = -1e9, real_key = -1e9;
+static NSTimeInterval real_key_stamp = -1;
+static unsigned short real_key_code;
+
+static void note_real(NSEvent *event) {
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    switch (event.type) {
+    case NSEventTypeRightMouseDown:
+        real_mouse = real_right = now;
+        break;
+    case NSEventTypeLeftMouseDown:
+        real_mouse = now;
+        // A control-click is a right click on a Mac.
+        if (event.modifierFlags & NSEventModifierFlagControl) real_right = now;
+        break;
+    case NSEventTypeOtherMouseDown:
+        real_mouse = now;
+        break;
+    case NSEventTypeKeyDown:
+    case NSEventTypeKeyUp:
+    case NSEventTypeFlagsChanged:
+        real_key = now;
+        real_key_stamp = event.timestamp;
+        real_key_code = event.keyCode;
+        break;
+    default:
+        break;
+    }
+}
+
+double glue_real_age(int kind) {
+    CFAbsoluteTime when = kind == CHROMIUM_REAL_RIGHT ? real_right : kind == CHROMIUM_REAL_KEY ? real_key : real_mouse;
+    return CFAbsoluteTimeGetCurrent() - when;
+}
+
+double chromium_real_input_age(int kind) {
+    return glue_real_age(kind);
+}
+
+int glue_real_key(void *os_event) {
+    if (!os_event) return 0;
+    NSEvent *event = (__bridge NSEvent *)os_event;
+    return event.timestamp == real_key_stamp && event.keyCode == real_key_code;
+}
+
+static int automation;
+
+void chromium_set_automation(int on) {
+    automation = on ? 1 : 0;
+}
+
+int glue_automation(void) {
+    return automation;
+}
+
 static void send_event(id self, SEL command, NSEvent *event) {
+    note_real(event);
     BOOL was = sending;
     sending = YES;
     ((void (*)(id, SEL, NSEvent *))sent)(self, command, event);
@@ -190,8 +252,11 @@ static void pump_stop(void) {
 
 // MARK: - The app and its browser process
 
-static int started, stopping, stopped, ready, mock_keychain, automated;
+static int started, stopping, stopped, ready, mock_keychain;
 static void (*on_ready)(void);
+/// chromium_options' switches, kept for before_command_line.
+static char **switches;
+static int switch_count;
 
 int glue_running(void) {
     return started && !stopping && !stopped;
@@ -211,14 +276,44 @@ static void append_switch(cef_command_line_t *line, const char *name) {
     cef_string_utf16_clear(&text);
 }
 
+/// `name=value`, or `name` alone. A feature list joins the one already
+/// there: set again, a switch's value replaces the old one, and CEF keeps
+/// features of its own in these.
+static void apply_switch(cef_command_line_t *line, const char *given) {
+    const char *equals = strchr(given, '=');
+    if (!equals) {
+        append_switch(line, given);
+        return;
+    }
+    char *name = strndup(given, (size_t)(equals - given));
+    const char *value = equals + 1;
+    cef_string_t key = {0}, text = {0};
+    glue_set(&key, name);
+    char *joined = NULL;
+    if (strcmp(name, "disable-features") == 0 || strcmp(name, "enable-features") == 0) {
+        char *before = line->has_switch(line, &key) ? glue_take(line->get_switch_value(line, &key)) : strdup("");
+        if (before[0]) {
+            size_t size = strlen(before) + strlen(value) + 2;
+            joined = malloc(size);
+            snprintf(joined, size, "%s,%s", before, value);
+        }
+        free(before);
+    }
+    glue_set(&text, joined ? joined : value);
+    line->append_switch_with_value(line, &key, &text);
+    cef_string_utf16_clear(&key);
+    cef_string_utf16_clear(&text);
+    free(joined);
+    free(name);
+}
+
 static void CEF_CALLBACK before_command_line(cef_app_t *self, const cef_string_t *type,
                                              cef_command_line_t *line) {
     // Only the browser process's: an empty type.
-    if ((!type || type->length == 0) && mock_keychain) append_switch(line, "use-mock-keychain");
-    // With tools driving pages, Back and Forward load afresh, as when
-    // Playwright starts Chrome: a page kept whole in the cache would come
-    // back without the scripts and bindings a tool put in it.
-    if ((!type || type->length == 0) && automated) append_switch(line, "disable-back-forward-cache");
+    if (!type || type->length == 0) {
+        if (mock_keychain) append_switch(line, "use-mock-keychain");
+        for (int i = 0; i < switch_count; i++) apply_switch(line, switches[i]);
+    }
     GLUE_RELEASE(line);
 }
 
@@ -251,6 +346,16 @@ static void CEF_CALLBACK schedule_work(cef_browser_process_handler_t *self, int6
     pump_ask(delay);
 }
 
+/// For windows Chromium opens itself with its own interface — a tool's
+/// contexts open theirs this way. Given none, such a browser would answer
+/// to nobody, and CEF would wait for it to be closed by hand before it
+/// could stop.
+static cef_client_t *CEF_CALLBACK default_client(cef_browser_process_handler_t *self) {
+    cef_client_t *client = glue_loose_client();
+    GLUE_ADD_REF(client);
+    return client;
+}
+
 // MARK: - Browsers Chromium makes for itself
 
 static cef_client_t loose;
@@ -281,12 +386,13 @@ static int CEF_CALLBACK loose_before_popup(cef_life_span_handler_t *self, cef_br
                                            cef_window_info_t *window, cef_client_t **client,
                                            cef_browser_settings_t *settings, cef_dictionary_value_t **extra,
                                            int *no_script) {
-    // A popup's own popups get windows of their own too, with this client.
+    // A popup's own popups get windows of their own too, with this client
+    // — without a click behind them only while a tool drives pages.
     if (client && *client) GLUE_RELEASE(*client);
     if (extra && *extra) GLUE_RELEASE(*extra);
     GLUE_RELEASE(frame);
     GLUE_RELEASE(browser);
-    return gesture ? 0 : 1;
+    return gesture || glue_automation() ? 0 : 1;
 }
 
 static void CEF_CALLBACK loose_created(cef_life_span_handler_t *self, cef_browser_t *browser) {
@@ -375,21 +481,49 @@ int glue_can_download(cef_download_handler_t *self, cef_browser_t *browser, cons
     return 1;
 }
 
+static chromium_downloads downloads;
+
+void chromium_set_downloads(const chromium_downloads *hooks) {
+    if (hooks) {
+        downloads = *hooks;
+    } else {
+        memset(&downloads, 0, sizeof downloads);
+    }
+}
+
+const chromium_downloads *glue_downloads(void) {
+    return &downloads;
+}
+
 int glue_before_download(cef_download_handler_t *self, cef_browser_t *browser, cef_download_item_t *item,
                          const cef_string_t *suggested, cef_before_download_callback_t *callback) {
+    int handled = 1;
     @autoreleasepool {
         char *name = glue_utf8(suggested);
-        NSString *path = download_path([NSString stringWithUTF8String:name]);
+        // Asked first, for a download a tool decides about.
+        char *chosen = NULL;
+        if (downloads.begin) {
+            char *url = glue_take(item->get_url(item));
+            chosen = downloads.begin(browser->get_identifier(browser), item->get_id(item), url, name);
+            free(url);
+        }
+        if (chosen && !chosen[0]) {
+            // Refused: not handled is cancelled, with Alloy's pages.
+            handled = 0;
+        } else {
+            NSString *path = chosen ? [NSString stringWithUTF8String:chosen] : download_path([NSString stringWithUTF8String:name]);
+            cef_string_t target = {0};
+            glue_set(&target, path.fileSystemRepresentation);
+            callback->cont(callback, &target, 0);
+            cef_string_utf16_clear(&target);
+        }
+        free(chosen);
         free(name);
-        cef_string_t target = {0};
-        glue_set(&target, path.fileSystemRepresentation);
-        callback->cont(callback, &target, 0);
-        cef_string_utf16_clear(&target);
     }
     GLUE_RELEASE(callback);
     GLUE_RELEASE(item);
     GLUE_RELEASE(browser);
-    return 1;
+    return handled;
 }
 
 // MARK: - Every browser
@@ -444,8 +578,14 @@ int chromium_start(const chromium_options *options, char *error, size_t size) {
     process.on_before_child_process_launch = before_child;
     process.on_already_running_app_relaunch = relaunched;
     process.on_schedule_message_pump_work = schedule_work;
+    process.get_default_client = default_client;
     mock_keychain = options->mock_keychain;
-    automated = options->port > 0;
+    if (options->switches && options->switch_count > 0) {
+        switches = calloc((size_t)options->switch_count, sizeof *switches);
+        for (int i = 0; i < options->switch_count; i++) {
+            if (options->switches[i]) switches[switch_count++] = strdup(options->switches[i]);
+        }
+    }
     on_ready = options->ready;
     pump_start();
 

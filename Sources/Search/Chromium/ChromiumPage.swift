@@ -21,6 +21,10 @@ final class ChromiumPage: PageEngine {
     private var page: OpaquePointer?
     /// Asked for before the page could take it, or with no page at all.
     private var zoom: CGFloat = 1
+    /// Its DevTools target and browser context, as tools name them, once
+    /// the page has said (see Automation).
+    private(set) var targetID: String?
+    private(set) var contextID: String?
 
     /// `url` is loaded as soon as the page exists; nil leaves it blank.
     init(url: URL?, profile: ChromiumProfile, sink: PageEventSink) {
@@ -42,6 +46,27 @@ final class ChromiumPage: PageEngine {
             ChromiumRuntime.release(profile)
         }
     }
+
+    /// A page for a popup another page opens (PageEventSink.pageWantsPopup):
+    /// Chromium makes its browser itself, with the opener's profile, so it
+    /// keeps its opener, the POST body it was opened with and the rest.
+    init(popupOf profile: ChromiumProfile, sink: PageEventSink) {
+        self.sink = sink
+        let relay = Unmanaged.passRetained(Relay(page: self, profile: profile))
+        var events = ChromiumPage.events
+        events.context = relay.toOpaque()
+        // Held as a page made in it would hold it, let go of by `closed`.
+        _ = ChromiumRuntime.context(for: profile)
+        let holder = Unmanaged.passUnretained(view).toOpaque()
+        page = chromium_page_make_popup(holder, &events)
+        if page == nil {
+            relay.release()
+            ChromiumRuntime.release(profile)
+        }
+    }
+
+    /// The C layer's page, for the popup event to hand back.
+    var handle: OpaquePointer? { page }
 
     deinit {
         if let page { chromium_page_close(page) }
@@ -116,9 +141,54 @@ final class ChromiumPage: PageEngine {
 
     func tearDown() {
         sink = nil
+        // Out of the room a tool's pages run in (see Automation), and gone.
+        if view.window === Automation.shared.room { view.removeFromSuperview() }
         guard let page else { return }
         self.page = nil
         chromium_page_close(page)
+    }
+
+    // MARK: - Questions
+
+    /// The page's question answered: OK or not, and a prompt's text.
+    func answer(ok: Bool, text: String?) {
+        guard let page else { return }
+        if let text {
+            text.withCString { chromium_page_answer(page, ok ? 1 : 0, $0) }
+        } else {
+            chromium_page_answer(page, ok ? 1 : 0, nil)
+        }
+    }
+
+    /// The question was answered elsewhere: let go of without an answer.
+    func forgetQuestion() {
+        if let page { chromium_page_forget_question(page) }
+    }
+
+    /// The permission the page asked for, answered (see
+    /// PageEventSink.pagePermission).
+    func permit(media: Bool, granted: Bool) {
+        if let page { chromium_page_permit(page, media ? 1 : 0, granted ? 1 : 0) }
+    }
+
+    // MARK: - For tools (see Automation)
+
+    /// The size a tool set (Emulation.setDeviceMetricsOverride): the page
+    /// laid out at exactly that, at the top left of its tab, as Chrome's
+    /// window is sized to it. Nil: the tab's own size.
+    var viewport: NSSize? {
+        get { (view as? Holder)?.fixed }
+        set { (view as? Holder)?.fixed = newValue }
+    }
+
+    /// The tool's mouse, drawn over the page: `point` in the page's CSS
+    /// pixels from its top left.
+    func showPointer(at point: CGPoint, pressed: Bool) {
+        (view as? Holder)?.point(at: point, pressed: pressed)
+    }
+
+    func hidePointer() {
+        (view as? Holder)?.hidePointer()
     }
 
     // MARK: - What the page reports
@@ -211,6 +281,41 @@ final class ChromiumPage: PageEngine {
         events.touched = { context in
             Relay.page(context) { $0.sink?.pageTouched() }
         }
+        events.target = { context, target, browserContext, browser in
+            guard let target else { return }
+            let id = String(cString: target)
+            let contextID = browserContext.map { String(cString: $0) } ?? ""
+            Relay.page(context) { page in
+                page.targetID = id
+                page.contextID = contextID
+                page.sink?.pageTarget(id, context: contextID, browser: browser)
+            }
+        }
+        events.dialog = { context, kind, origin, message, text, reload in
+            let from = origin.map { String(cString: $0) } ?? ""
+            let said = message.map { String(cString: $0) } ?? ""
+            let given = text.map { String(cString: $0) } ?? ""
+            return Relay.answer(context, otherwise: 0) { page -> Int32 in
+                page.sink?.pageAsks(Int(kind), origin: from, message: said, text: given, reload: reload != 0) == true ? 1 : 0
+            }
+        }
+        events.dialog_gone = { context in
+            Relay.page(context) { $0.sink?.pageQuestionGone() }
+        }
+        events.popup = { context, url, kind, _ in
+            let address = url.map { String(cString: $0) } ?? ""
+            let made = Relay.pointer(context) { page -> Int in
+                let link = address.isEmpty ? nil : URL(string: address)
+                return Int(bitPattern: page.sink?.pageWantsPopup(link, kind: Int(kind))?.handle)
+            }
+            return OpaquePointer(bitPattern: made)
+        }
+        events.permission = { context, origin, media, kinds in
+            let from = origin.map { String(cString: $0) } ?? ""
+            return Relay.answer(context, otherwise: -1) { page -> Int32 in
+                page.sink?.pagePermission(origin: from, media: media != 0, kinds: UInt32(kinds)) ?? -1
+            }
+        }
         events.closed = { context in
             guard let context else { return }
             let relay = Unmanaged<Relay>.fromOpaque(context)
@@ -245,6 +350,29 @@ private final class Relay {
             if let page = relay.page { body(page) }
         }
     }
+
+    /// The same, for a callback the C layer waits on for an answer:
+    /// `otherwise` when the page has gone.
+    static func answer(_ context: UnsafeMutableRawPointer?, otherwise: Int32,
+                       _ body: @MainActor (ChromiumPage) -> Int32) -> Int32 {
+        guard let context else { return otherwise }
+        let relay = Unmanaged<Relay>.fromOpaque(context).takeUnretainedValue()
+        return MainActor.assumeIsolated {
+            guard let page = relay.page else { return otherwise }
+            return body(page)
+        }
+    }
+
+    /// The same, for a page handed back across the C boundary as its bits.
+    static func pointer(_ context: UnsafeMutableRawPointer?, _ body: @MainActor (ChromiumPage) -> Int) -> Int {
+        let otherwise = 0
+        guard let context else { return otherwise }
+        let relay = Unmanaged<Relay>.fromOpaque(context).takeUnretainedValue()
+        return MainActor.assumeIsolated {
+            guard let page = relay.page else { return otherwise }
+            return body(page)
+        }
+    }
 }
 
 /// The page's place in the window. Chromium's view fills it, kept so here
@@ -255,6 +383,9 @@ private final class Holder: NSView {
         super.init(frame: frame)
         wantsLayer = true
         autoresizesSubviews = true
+        // A page laid out larger than its tab (a tool's viewport) stays
+        // inside it.
+        clipsToBounds = true
     }
 
     required init?(coder: NSCoder) {
@@ -267,7 +398,129 @@ private final class Holder: NSView {
         layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
     }
 
+    /// A size a tool set for the page, at the top left; nil to fill.
+    var fixed: NSSize? {
+        didSet {
+            guard fixed != oldValue else { return }
+            resizeSubviews(withOldSize: bounds.size)
+        }
+    }
+
     override func resizeSubviews(withOldSize oldSize: NSSize) {
-        for view in subviews { view.frame = bounds }
+        for view in subviews {
+            if view === arrow {
+                view.frame = bounds
+            } else if let fixed {
+                view.frame = NSRect(x: 0, y: bounds.height - fixed.height, width: fixed.width, height: fixed.height)
+            } else {
+                view.frame = bounds
+            }
+        }
+    }
+
+    // MARK: The tool's pointer
+
+    private var arrow: PointerView?
+
+    /// `point` in CSS pixels from the page's top left: the same as points
+    /// at 100% zoom, which a page a tool drives is held at.
+    func point(at point: CGPoint, pressed: Bool) {
+        let view = arrow ?? {
+            let made = PointerView(frame: bounds)
+            arrow = made
+            return made
+        }()
+        // Over Chromium's view, which came in after it was made.
+        if subviews.last !== view {
+            view.removeFromSuperview()
+            addSubview(view, positioned: .above, relativeTo: nil)
+        }
+        view.frame = bounds
+        // The page's top left is the holder's, whatever size it is laid
+        // out at (see resizeSubviews).
+        view.move(to: CGPoint(x: point.x, y: bounds.height - point.y), pressed: pressed)
+    }
+
+    func hidePointer() {
+        arrow?.removeFromSuperview()
+        arrow = nil
+    }
+}
+
+/// The arrow drawn where a tool's mouse is, with a ring that spreads from
+/// it when it presses. Never in the way: clicks go through it to the page.
+private final class PointerView: NSView {
+    private let shape = CAShapeLayer()
+    private var fade: DispatchWorkItem?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        let path = CGMutablePath()
+        // The arrow of the system's own cursor, its tip at the origin.
+        path.move(to: CGPoint(x: 0, y: 0))
+        path.addLine(to: CGPoint(x: 0, y: -17))
+        path.addLine(to: CGPoint(x: 4.2, y: -13))
+        path.addLine(to: CGPoint(x: 7, y: -19.5))
+        path.addLine(to: CGPoint(x: 9.8, y: -18.3))
+        path.addLine(to: CGPoint(x: 7.1, y: -12))
+        path.addLine(to: CGPoint(x: 12.5, y: -12))
+        path.closeSubpath()
+        shape.path = path
+        shape.fillColor = NSColor.black.cgColor
+        shape.strokeColor = NSColor.white.cgColor
+        shape.lineWidth = 1.4
+        shape.shadowOpacity = 0.3
+        shape.shadowRadius = 2
+        shape.shadowOffset = CGSize(width: 0, height: -1)
+        layer?.addSublayer(shape)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("not made from a nib")
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func move(to point: CGPoint, pressed: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        shape.position = point
+        shape.opacity = 1
+        CATransaction.commit()
+        if pressed { ripple(at: point) }
+        fade?.cancel()
+        let later = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.6)
+            self.shape.opacity = 0
+            CATransaction.commit()
+        }
+        fade = later
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: later)
+    }
+
+    private func ripple(at point: CGPoint) {
+        let ring = CAShapeLayer()
+        ring.path = CGPath(ellipseIn: CGRect(x: -6, y: -6, width: 12, height: 12), transform: nil)
+        ring.position = point
+        ring.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor
+        ring.strokeColor = NSColor.controlAccentColor.cgColor
+        ring.lineWidth = 1.5
+        layer?.insertSublayer(ring, below: shape)
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.45)
+        CATransaction.setCompletionBlock { ring.removeFromSuperlayer() }
+        let grow = CABasicAnimation(keyPath: "transform.scale")
+        grow.fromValue = 1
+        grow.toValue = 3.2
+        let vanish = CABasicAnimation(keyPath: "opacity")
+        vanish.fromValue = 1
+        vanish.toValue = 0
+        ring.add(grow, forKey: "grow")
+        ring.add(vanish, forKey: "vanish")
+        ring.opacity = 0
+        CATransaction.commit()
     }
 }

@@ -13,6 +13,7 @@ struct EngineSettings: View {
     /// Told to stay with WebKit after Chromium didn't start.
     @State private var settled = false
     @State private var drives = Store.settings.integer(forKey: WebEngine.portKey) != 0
+    @State private var pointer = Automation.shared.showsPointer
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -50,6 +51,12 @@ struct EngineSettings: View {
                 Line("Let Playwright and other tools drive Chromium", portDetail) {
                     Switch(on: $drives)
                 }
+                if drives {
+                    Rule()
+                    Line("Show where a tool clicks", "An arrow over the page where a tool's mouse is, and a ring when it clicks") {
+                        Switch(on: $pointer)
+                    }
+                }
                 if addon.state == .ready, WebEngine.current != .chromium {
                     Rule()
                     Line("Chromium add-on", installedDetail) {
@@ -60,6 +67,9 @@ struct EngineSettings: View {
         }
         .onChange(of: drives) { _, on in
             Store.settings.set(on ? WebEngine.port : 0, forKey: WebEngine.portKey)
+        }
+        .onChange(of: pointer) { _, on in
+            Store.settings.set(on, forKey: Automation.pointerKey)
         }
     }
 
@@ -113,6 +123,7 @@ struct EngineSettings: View {
     private var portDetail: String {
         let port = ChromiumRuntime.debuggingPort
         if WebEngine.current == .chromium, port > 0 {
+            if let trouble = DevToolsBridge.shared.trouble { return trouble }
             return drives
                 ? "Listening on 127.0.0.1:\(port), for chromium.connectOverCDP. Only on this Mac"
                 : "Listening on 127.0.0.1:\(port) until Search next opens"

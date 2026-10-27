@@ -29,7 +29,9 @@ enum WebEngine: String, CaseIterable {
 
     /// What the setting asks for.
     nonisolated static var chosen: WebEngine {
-        Store.settings.string(forKey: key).flatMap(WebEngine.init) ?? .webkit
+        // Started by Playwright, which drives Chromium (Launch.swift).
+        if Launch.active { return .chromium }
+        return Store.settings.string(forKey: key).flatMap(WebEngine.init) ?? .webkit
     }
 
     /// What this process runs, decided the first time anyone asks and never
@@ -131,6 +133,22 @@ enum WebEngine: String, CaseIterable {
     func pageDownloaded(_ file: URL, from source: URL?)
     /// The page was clicked or scrolled, or took the keyboard.
     func pageTouched()
+    /// The page's DevTools target and browser context, as tools name them,
+    /// and its browser's identifier (see Automation).
+    func pageTarget(_ target: String, context: String, browser: Int32)
+    /// A question from the page — alert, confirm, prompt, or leaving
+    /// (CHROMIUM_DIALOG_*). True when it is asked here and answered through
+    /// ChromiumPage.answer; false for Chromium's own dialog.
+    func pageAsks(_ kind: Int, origin: String, message: String, text: String, reload: Bool) -> Bool
+    /// The question was answered or taken back elsewhere: whatever shows it
+    /// goes.
+    func pageQuestionGone()
+    /// The page opens a popup (CHROMIUM_POPUP_*): the page made for it, in a
+    /// tab of its own, or nil to refuse it.
+    func pageWantsPopup(_ url: URL?, kind: Int) -> ChromiumPage?
+    /// A permission the page asks for: 1 grant, 0 deny, -1 Chromium's own
+    /// answer, 2 asked, to be answered through ChromiumPage.permit.
+    func pagePermission(origin: String, media: Bool, kinds: UInt32) -> Int32
 }
 
 /// Where a Chromium page keeps its cookies and sign-ins — the counterpart of

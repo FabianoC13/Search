@@ -161,7 +161,10 @@ enum Browsers {
     }
 
     /// A window around `browser`, made here rather than by SwiftUI.
-    static func open(_ browser: Browser, frame: NSRect?) {
+    /// `quietly`: in front of Search's other windows, but neither key nor
+    /// brought forward with the app — a tool's window (see Automation)
+    /// doesn't take the keyboard from whatever you are doing.
+    static func open(_ browser: Browser, frame: NSRect?, quietly: Bool = false) {
         let popup = browser.extensionPopup != nil
         let host: NSView
         if popup {
@@ -176,7 +179,7 @@ enum Browsers {
         // A new window from one in full screen: in full screen of its own,
         // in a Space of its own, as Safari and Chrome do — sized as a window
         // for when it leaves full screen, not as the screen.
-        let fullScreen = !popup && frame == nil && front?.window?.styleMask.contains(.fullScreen) == true
+        let fullScreen = !popup && !quietly && frame == nil && front?.window?.styleMask.contains(.fullScreen) == true
         let size = popup ? NSSize(width: 480, height: 600)
             : fullScreen ? NSSize(width: 1180, height: 780)
             : front?.window?.frame.size ?? NSSize(width: 1180, height: 780)
@@ -212,6 +215,10 @@ enum Browsers {
         // a window with no frame and no NSWindow behind it (#408, lulkebit).
         register(browser)
         Bench.keepOff(window)
+        if quietly {
+            window.orderFront(nil)
+            return
+        }
         window.makeKeyAndOrderFront(nil)
         // Never in a test run: full screen would put a probe's window on a screen.
         if fullScreen, !Store.testing { window.toggleFullScreen(nil) }

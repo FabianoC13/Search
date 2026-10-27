@@ -1,6 +1,7 @@
 import SwiftUI
 import WebKit
 import Combine
+import CChromium
 
 // Everything the window knows: which tabs exist, which one is showing, and
 // whether the address field is up. Small enough to read in one sitting, which
@@ -1476,6 +1477,9 @@ final class Browser: NSObject, ObservableObject {
     /// alert(), confirm() and prompt() from tabs that weren't in front,
     /// waiting for them to be (see Dialogs.swift).
     var heldDialogs: [Tab.ID: [HeldQuestion]] = [:]
+    /// A Chromium page's question on show, by tab: put away when a tool
+    /// answers it over DevTools first (see Dialogs.swift).
+    var chromiumQuestions: [Tab.ID: NSAlert] = [:]
     /// Questions asked by a page of the pair on screen, each drawn over its
     /// own page, oldest first (see Dialogs.swift).
     @Published var paneQuestions: [PaneQuestion] = []
@@ -1553,10 +1557,13 @@ final class Browser: NSObject, ObservableObject {
             } else if prefs.benchRefused {
                 announce("“Let a script drive Search” was turned on outside Settings, and stays off")
             }
-            welcoming = !prefs.welcomed
-            newsShowing = WhatsNew.due(prefs: prefs, welcoming: welcoming)
+            // Started by Playwright for a run (Launch.swift): none of a first
+            // launch, and no update to look for.
+            welcoming = !prefs.welcomed && !Launch.active
+            newsShowing = !Launch.active && WhatsNew.due(prefs: prefs, welcoming: welcoming)
             // Once a day, quietly: is there a newer one?
-            Updater.shared.checkIfDue { [weak self] line in self?.announce(line) }
+            if !Launch.active { Updater.shared.checkIfDue { [weak self] line in self?.announce(line) } }
+            if WebEngine.current == .chromium { Automation.installDownloadHooks() }
             FormRelay.passkeysOffered = prefs.passkeys
             // An icon that arrives is put on every tab showing that site, in
             // every window, not only the one that happened to ask for it.
@@ -2292,7 +2299,8 @@ final class Browser: NSObject, ObservableObject {
     private func kept(_ tab: Tab) -> Bool {
         // A tab holding an extension's sign-in answer (Tab.hold) carries its
         // code in the address: that is never written down.
-        !tab.shy && !tab.bench && tab.held == nil && (tab.pending ?? tab.address)?.scheme?.hasPrefix("http") == true
+        !tab.shy && !tab.bench && !tab.automated && tab.held == nil
+            && (tab.pending ?? tab.address)?.scheme?.hasPrefix("http") == true
     }
 
     /// Another space's row. Its groups are the ones in its own file, the
@@ -4215,12 +4223,13 @@ extension Browser: TabHost {
         // be turned on a moment later, and a tab that then has to wait for a
         // fetch looks broken.
         Favicons.shared.fetch(for: tab)
-        guard !tab.shy, !tab.bench else { return }
+        guard !tab.shy, !tab.bench, !tab.automated else { return }
         history.record(url, title: tab.title)
         // A site's home page that says where its search is (OpenSearch):
         // with Search a site on, it joins the list (see SiteSearch.learn).
         // Chromium hands back no answer, so only WebKit's pages say.
-        if prefs.searchesSites, url.scheme == "https", url.path.isEmpty || url.path == "/" {
+        // Nothing of Search's is run in a page a tool drives.
+        if prefs.searchesSites, !tab.driven, url.scheme == "https", url.path.isEmpty || url.path == "/" {
             tab.page?.evaluate(SiteSearch.lookup) { value in
                 guard let text = value as? String, let description = URL(string: text) else { return }
                 MainActor.assumeIsolated { SiteSearch.learn(from: url, description: description) }
@@ -4247,6 +4256,12 @@ extension Browser: TabHost {
 
     func tabProcessGone(_ tab: Tab) {
         dropQuestions(for: tab.id)
+        // A tool's page stays crashed: the tool hears of it (page.on('crash'))
+        // and decides, as with Chrome.
+        if tab.driven {
+            tab.stale = true
+            return
+        }
         // In front of you: straight back, a reload beats a white page with a
         // button on it. Behind another tab: the moment you come back to it.
         if tab.id == activeID, !tab.isBlank {
@@ -4260,7 +4275,50 @@ extension Browser: TabHost {
     /// came from, private from a private one, behind it unless it asked for
     /// the front — as a ⌘-clicked link opens from a WebKit page.
     func tabWantsTab(_ tab: Tab, url: URL, foreground: Bool) {
-        open(url, foreground: foreground, from: tab, mayWait: true)
+        // With a tool driving pages, it loads at once, lazy tabs or not: the
+        // tool is waiting for its page to come.
+        let made = open(url, foreground: foreground, from: tab, mayWait: !Automation.shared.connected)
+        if tab.automated { made.automated = true }
+    }
+
+    /// A popup from a Chromium page — a link with a target, window.open —
+    /// in a tab of its own, as WebKit's popups get (createWebViewWith): its
+    /// page made by Chromium, which keeps its opener.
+    func tabWantsPopup(_ tab: Tab, url: URL?, kind: Int) -> ChromiumPage? {
+        guard let profile = tab.profile else { return nil }
+        let made = Tab(shy: tab.shy)
+        made.kin = tab.kin
+        made.popup = kind == Int(CHROMIUM_POPUP_WINDOW)
+        made.opener = tab.id
+        made.automated = tab.automated
+        made.toolContext = tab.toolContext
+        if kind == Int(CHROMIUM_POPUP_BACKGROUND_TAB) {
+            prepare(made)
+            if prefs.usesTabGroups, !made.shy, !made.bench { made.groupID = tab.groupID }
+            tabs.insert(made, at: placeForNew())
+        } else {
+            adopt(made)
+            activeID = made.id
+            editing = false
+        }
+        // Never blank: a popup opened on about:blank, to be written into, is a
+        // page all the same.
+        made.setAddressOptimistically(url ?? URL(string: "about:blank")!)
+        let page = made.openPopup(profile: profile)
+        if Automation.shared.connected, tab.driven, !visibleTabIDs.contains(made.id) {
+            Automation.shared.keepRunning(made)
+        }
+        return page
+    }
+
+    func tabAsks(_ tab: Tab, kind: Int, origin: String, message: String, text: String, reload: Bool) -> Bool {
+        askChromium(tab, kind: kind, origin: origin, message: message, text: text, reload: reload)
+    }
+
+    func tabQuestionGone(_ tab: Tab) { chromiumQuestionGone(tab) }
+
+    func tabAsksPermission(_ tab: Tab, origin: String, media: Bool, kinds: UInt32) -> Int32 {
+        askChromiumPermission(tab, origin: origin, media: media, kinds: kinds)
     }
 
     /// A page asking to close itself (see webViewDidClose).
@@ -4277,6 +4335,9 @@ extension Browser: TabHost {
     /// Into the Downloads list, as WebKit's downloads go once they finish —
     /// a private tab's excepted, which the list never shows.
     func tabDownloaded(_ tab: Tab, file: URL, from source: URL?) {
+        // A tool's, saved where it asked: not one for the list (yours it
+        // put there too are listed by Automation, from your Downloads).
+        guard !Automation.shared.isToolDownload(file) else { return }
         guard !tab.shy else {
             announce("Saved \(file.lastPathComponent)")
             return
@@ -5163,7 +5224,7 @@ extension Browser: WKDownloadDelegate {
 
     /// WebKit refuses to write over a file that is already there, so the name
     /// gains a number rather than the download quietly failing.
-    private static func free(_ name: String, in folder: URL) -> URL {
+    static func free(_ name: String, in folder: URL) -> URL {
         let stem = (name as NSString).deletingPathExtension
         let ext = (name as NSString).pathExtension
         var candidate = folder.appendingPathComponent(name)

@@ -1,5 +1,6 @@
 import AppKit
 import WebKit
+import CChromium
 
 // The questions a page is allowed to ask, and the answers it gets.
 //
@@ -184,6 +185,140 @@ extension Browser {
                 completionHandler(answer == .alertFirstButtonReturn ? field.stringValue : nil)
             }
         }, drop: { completionHandler(nil) })
+    }
+
+    // MARK: - a Chromium page's questions
+
+    /// The same as `ask(from:)`, for a tab whose page Chromium draws.
+    func ask(for tab: Tab, show: @escaping () -> Void, drop: @escaping () -> Void) {
+        let known = tabs + parkedTabs
+        for id in heldDialogs.keys where !known.contains(where: { $0.id == id }) {
+            heldDialogs.removeValue(forKey: id)?.forEach { $0.dismiss() }
+        }
+        guard known.contains(where: { $0.id == tab.id }), tab.id != activeID else {
+            show()
+            return
+        }
+        heldDialogs[tab.id, default: []].append(HeldQuestion(show: show, drop: drop))
+    }
+
+    /// alert(), confirm(), prompt() and leaving, from a page Chromium
+    /// draws: the sheets WebKit's pages get, over its own page only. A tool
+    /// may answer first, over DevTools: then the sheet goes without an
+    /// answer of its own (chromiumQuestionGone).
+    func askChromium(_ tab: Tab, kind: Int, origin: String, message: String, text: String, reload: Bool) -> Bool {
+        guard let page = tab.page as? ChromiumPage else { return false }
+        let id = tab.id
+        let finish: (Bool, String?) -> Void = { [weak self, weak page] ok, answer in
+            self?.chromiumQuestions[id] = nil
+            page?.answer(ok: ok, text: answer)
+        }
+        ask(for: tab, show: { [weak self, weak page] in
+            guard let self, let page else { return finish(false, nil) }
+            let alert = NSAlert()
+            let host = URL(string: origin)?.host() ?? ""
+            alert.messageText = host.isEmpty ? "This page says" : host
+            alert.informativeText = message
+            alert.alertStyle = .informational
+            var field: NSTextField?
+            switch kind {
+            case Int(CHROMIUM_DIALOG_CONFIRM):
+                alert.addButton(withTitle: "OK")
+                alert.addButton(withTitle: "Cancel")
+            case Int(CHROMIUM_DIALOG_PROMPT):
+                alert.addButton(withTitle: "OK")
+                alert.addButton(withTitle: "Cancel")
+                let input = NSTextField(string: text)
+                input.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+                alert.accessoryView = input
+                alert.window.initialFirstResponder = input
+                field = input
+            case Int(CHROMIUM_DIALOG_LEAVE):
+                alert.messageText = reload ? "Reload this page?" : "Leave this page?"
+                alert.informativeText = "Changes you made may not be saved."
+                alert.addButton(withTitle: reload ? "Reload" : "Leave")
+                alert.addButton(withTitle: "Stay")
+            default:
+                alert.addButton(withTitle: "OK")
+            }
+            self.chromiumQuestions[id] = alert
+            Dialogs.show(alert, over: page.view) { answer in
+                let ok = answer == .alertFirstButtonReturn
+                finish(ok, ok ? field?.stringValue : nil)
+            }
+        }, drop: { finish(false, nil) })
+        return true
+    }
+
+    /// What a Chromium page may be let do, answered for this launch, by
+    /// site and kind.
+    private static var chromiumPermits: [String: Bool] = [:]
+
+    /// A Chromium page asking for the camera, the microphone or your
+    /// location: Allow or Don't Allow, over its own page, once per site and
+    /// kind for as long as Search runs. What has no words here — the
+    /// screen, notifications, which Chromium mode doesn't show — is left to
+    /// Chromium, which refuses it.
+    func askChromiumPermission(_ tab: Tab, origin: String, media: Bool, kinds: UInt32) -> Int32 {
+        guard let page = tab.page as? ChromiumPage, let what = Browser.wanted(media: media, kinds: kinds) else { return -1 }
+        let host = URL(string: origin)?.host() ?? origin
+        let key = "\(host) \(media) \(kinds)"
+        if let known = Browser.chromiumPermits[key] { return known ? 1 : 0 }
+        // A test run is never asked on a screen: refused, as cancelled.
+        if Store.testing { return 0 }
+        ask(for: tab, show: { [weak page] in
+            guard let page else { return }
+            let alert = NSAlert()
+            alert.messageText = "\(host) wants to \(what)"
+            alert.informativeText = "Only for as long as Search is open. You can stop it any time by closing the page."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Allow")
+            alert.addButton(withTitle: "Don't Allow")
+            Dialogs.show(alert, over: page.view) { [weak page] answer in
+                let granted = answer == .alertFirstButtonReturn
+                Browser.chromiumPermits[key] = granted
+                page?.permit(media: media, granted: granted)
+            }
+        }, drop: { [weak page] in page?.permit(media: media, granted: false) })
+        return 2
+    }
+
+    /// The words for what a page asks to do; nil for anything else.
+    private static func wanted(media: Bool, kinds: UInt32) -> String? {
+        if media {
+            // CEF's media bits: 1 the microphone, 2 the camera; the screen's
+            // are left to Chromium.
+            guard kinds & ~UInt32(3) == 0 else { return nil }
+            switch kinds {
+            case 1: return "use your microphone"
+            case 2: return "use your camera"
+            case 3: return "use your camera and microphone"
+            default: return nil
+            }
+        }
+        // CEF's permission bits (cef_permission_request_types_t).
+        let words: [(UInt32, String)] = [
+            (1 << 8, "know your location"), (1 << 2, "use your camera"), (1 << 12, "use your microphone"),
+        ]
+        var said: [String] = []
+        var left = kinds
+        for (bit, word) in words where kinds & bit != 0 {
+            said.append(word)
+            left &= ~bit
+        }
+        guard left == 0, !said.isEmpty else { return nil }
+        return said.joined(separator: " and ")
+    }
+
+    /// A Chromium page's question was answered elsewhere — by a tool over
+    /// DevTools, or taken back by a navigation: its sheet goes, and so does
+    /// one still waiting for its tab, neither answering again.
+    func chromiumQuestionGone(_ tab: Tab) {
+        (tab.page as? ChromiumPage)?.forgetQuestion()
+        heldDialogs.removeValue(forKey: tab.id)?.forEach { $0.dismiss() }
+        if let alert = chromiumQuestions.removeValue(forKey: tab.id), let parent = alert.window.sheetParent {
+            parent.endSheet(alert.window)
+        }
     }
 
     // MARK: - choosing a file
@@ -403,6 +538,27 @@ enum Dialogs {
             return
         }
         if let window = window(for: webView) {
+            alert.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            finish(alert.runModal())
+        }
+    }
+
+    /// The same, over a page that isn't WebKit's (a Chromium page's view).
+    static func show(
+        _ alert: NSAlert,
+        over view: NSView,
+        then finish: @escaping (NSApplication.ModalResponse) -> Void
+    ) {
+        if Store.testing {
+            askedInTest.append(alert.messageText)
+            finish(.cancel)
+            return
+        }
+        // A page running out of sight for a tool (Automation's room) has no
+        // window anybody sees: the sheet goes on the one in front.
+        let own = view.window === Automation.shared.room ? nil : view.window
+        if let window = own ?? NSApp.mainWindow ?? NSApp.windows.first(where: { $0.contentView != nil && $0.isVisible }) {
             alert.beginSheetModal(for: window, completionHandler: finish)
         } else {
             finish(alert.runModal())

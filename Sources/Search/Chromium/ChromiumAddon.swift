@@ -68,7 +68,15 @@ final class ChromiumAddon: ObservableObject {
     // MARK: - Where
 
     nonisolated static var folder: URL { Store.folder.appendingPathComponent("Chromium", isDirectory: true) }
-    nonisolated static var home: URL { folder.appendingPathComponent(pinned, isDirectory: true) }
+    nonisolated static var home: URL { (Launch.active ? installedFolder : folder).appendingPathComponent(pinned, isDirectory: true) }
+    /// Where the add-on of the Search you use lives. A run Playwright started
+    /// keeps everything in a folder of its own (Launch.swift), and reads the
+    /// add-on from yours.
+    nonisolated static var installedFolder: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return support.appendingPathComponent(Store.beta ? "Search Beta" : "Search", isDirectory: true)
+            .appendingPathComponent("Chromium", isDirectory: true)
+    }
     nonisolated static func framework(in home: URL) -> URL {
         home.appendingPathComponent("Chromium Embedded Framework.framework", isDirectory: true)
     }

@@ -683,6 +683,12 @@ private struct SideRow: View {
                         .font(.system(size: 9))
                         .foregroundStyle(colour.opacity(0.7))
                 }
+                if tab.driven {
+                    // A tool is driving this page (see Automation).
+                    Image(systemName: "cursorarrow.motionlines")
+                        .font(.system(size: 9))
+                        .foregroundStyle(colour.opacity(0.7))
+                }
                 if tab.shy {
                     Image(systemName: "eye.slash")
                         .font(.system(size: 9))

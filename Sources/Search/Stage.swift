@@ -274,6 +274,8 @@ final class StageView: NSView {
         let docked = inspecting
         for view in subviews where view !== wanted && !(docked && Self.isInspector(view)) {
             view.removeFromSuperview()
+            // A page a tool drives goes on running out of sight (Automation).
+            Automation.shared.steppedAside(view)
         }
 
         guard let wanted, window != nil else { return }

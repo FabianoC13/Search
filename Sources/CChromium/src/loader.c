@@ -18,6 +18,7 @@
 #include "include/capi/cef_app_capi.h"
 #include "include/capi/cef_browser_capi.h"
 #include "include/capi/cef_request_context_capi.h"
+#include "include/capi/cef_values_capi.h"
 #include "include/internal/cef_string_list.h"
 
 #include "CChromium.h"
@@ -57,6 +58,8 @@ int chromium_loaded(void);
     V(cef_string_utf16_clear, (cef_string_utf16_t * str), (str))                              \
     V(cef_string_utf8_clear, (cef_string_utf8_t * str), (str))                                \
     V(cef_string_userfree_utf16_free, (cef_string_userfree_utf16_t str), (str))               \
+    F(cef_value_t *, cef_value_create, (void), ())                                            \
+    F(cef_dictionary_value_t *, cef_dictionary_value_create, (void), ())                      \
     F(size_t, cef_string_list_size, (cef_string_list_t list), (list))                         \
     F(int, cef_string_list_value, (cef_string_list_t list, size_t index, cef_string_t *value), \
       (list, index, value))

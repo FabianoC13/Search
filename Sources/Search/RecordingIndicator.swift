@@ -22,6 +22,9 @@ struct RecordingLine: Identifiable, Equatable {
     let name: String
     /// "is recording your screen", "is using your camera and microphone"…
     let what: String
+    /// A tool driving Search over DevTools (see Automation), not an
+    /// extension recording: a blue dot, and Disconnect.
+    var automation = false
 }
 
 @MainActor
@@ -38,10 +41,26 @@ final class RecordingIndicator: ObservableObject {
     /// came from, to be given back.
     private var hosted: [(web: WKWebView, home: NSView?)] = []
 
+    /// The extensions' lines, and the tools' (see automation).
+    private var recordingLines: [RecordingLine] = []
+    private var automationLine: RecordingLine?
+
+    /// A tool driving Search, or none: a line of its own beside the
+    /// extensions', with Disconnect.
+    func automation(_ line: RecordingLine?) {
+        guard line != automationLine else { return }
+        automationLine = line
+        let shown = recordingLines + [automationLine].compactMap { $0 }
+        if lines != shown { lines = shown }
+        settle()
+    }
+
     /// The lines as they are now, and the pages capturing: shown when
     /// there are any, or a page is lent to the pill; gone when there are
     /// none. A tab whose page is among them wears a mark in the row.
     func update(_ lines: [RecordingLine], pages: [WKWebView] = []) {
+        recordingLines = lines
+        let lines = lines + [automationLine].compactMap { $0 }
         if self.lines != lines { self.lines = lines }
         let capturing = Set(pages.map(ObjectIdentifier.init))
         for browser in Browsers.all {
@@ -53,8 +72,11 @@ final class RecordingIndicator: ObservableObject {
         settle()
     }
 
-    /// A line's Stop.
-    func stop(_ id: String) { onStop?(id) }
+    /// A line's Stop — Disconnect, for a tool's.
+    func stop(_ id: String) {
+        if id == Automation.lineID { return Automation.shared.disconnectAll() }
+        onStop?(id)
+    }
 
     // MARK: - lending an offscreen page (phase 2)
 
@@ -183,7 +205,7 @@ struct PillView: View {
                     // The pill's one colour: a recording is known at a
                     // glance by its red dot, as in Chrome and Loom.
                     Circle()
-                        .fill(Color(nsColor: .systemRed))
+                        .fill(Color(nsColor: line.automation ? .systemBlue : .systemRed))
                         .frame(width: 7, height: 7)
                     (Text(line.name).font(.system(size: 12.5, weight: .semibold))
                         + Text(" \(line.what)").font(.system(size: 12.5)))
@@ -192,7 +214,7 @@ struct PillView: View {
                         .fixedSize()
                     Spacer(minLength: 12)
                     Button { indicator.stop(line.id) } label: {
-                        Text("Stop")
+                        Text(line.automation ? "Disconnect" : "Stop")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Palette.ground)
                             .padding(.horizontal, 11)

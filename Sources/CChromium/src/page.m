@@ -18,12 +18,21 @@
 #include "glue.h"
 #include "include/capi/cef_audio_handler_capi.h"
 #include "include/capi/cef_callback_capi.h"
+#include "include/capi/cef_context_menu_handler_capi.h"
 #include "include/capi/cef_cookie_capi.h"
+#include "include/capi/cef_devtools_message_observer_capi.h"
+#include "include/capi/cef_dialog_handler_capi.h"
 #include "include/capi/cef_focus_handler_capi.h"
+#include "include/capi/cef_jsdialog_handler_capi.h"
+#include "include/capi/cef_keyboard_handler_capi.h"
 #include "include/capi/cef_load_handler_capi.h"
+#include "include/capi/cef_menu_model_capi.h"
 #include "include/capi/cef_navigation_entry_capi.h"
+#include "include/capi/cef_permission_handler_capi.h"
+#include "include/capi/cef_registration_capi.h"
 #include "include/capi/cef_request_capi.h"
 #include "include/capi/cef_request_handler_capi.h"
+#include "include/capi/cef_values_capi.h"
 
 // MARK: - Contexts
 
@@ -94,6 +103,75 @@ static cef_request_context_t *context_take(struct chromium_context *context) {
     return context->context;
 }
 
+int chromium_context_set_proxy(chromium_context *context, const char *server, const char *bypass) {
+    if (!context || context->global || !server || !glue_running()) return 0;
+    cef_request_context_t *made = context_take(context);
+    if (!made) return 0;
+    cef_dictionary_value_t *settings = cef_dictionary_value_create();
+    cef_string_t key = {0}, value = {0};
+    const char *pairs[][2] = {{"mode", "fixed_servers"}, {"server", server}, {"bypass_list", bypass}};
+    for (size_t i = 0; i < sizeof pairs / sizeof *pairs; i++) {
+        if (!pairs[i][1] || !pairs[i][1][0]) continue;
+        glue_set(&key, pairs[i][0]);
+        glue_set(&value, pairs[i][1]);
+        settings->set_string(settings, &key, &value);
+        cef_string_utf16_clear(&key);
+        cef_string_utf16_clear(&value);
+    }
+    cef_value_t *preference = cef_value_create();
+    // Each handed over with the reference made for it.
+    preference->set_dictionary(preference, settings);
+    cef_string_t name = {0}, error = {0};
+    glue_set(&name, "proxy");
+    int ok = made->base.set_preference(&made->base, &name, preference, &error);
+    cef_string_utf16_clear(&name);
+    cef_string_utf16_clear(&error);
+    GLUE_RELEASE(made);
+    return ok;
+}
+
+// DevTools' names for the permissions that are a site's settings.
+static const struct {
+    const char *name;
+    cef_content_setting_types_t type;
+} permission_settings[] = {
+    {"geolocation", CEF_CONTENT_SETTING_TYPE_GEOLOCATION},
+    {"notifications", CEF_CONTENT_SETTING_TYPE_NOTIFICATIONS},
+    {"videoCapture", CEF_CONTENT_SETTING_TYPE_MEDIASTREAM_CAMERA},
+    {"audioCapture", CEF_CONTENT_SETTING_TYPE_MEDIASTREAM_MIC},
+    {"midi", CEF_CONTENT_SETTING_TYPE_MIDI},
+    {"midiSysex", CEF_CONTENT_SETTING_TYPE_MIDI_SYSEX},
+    {"clipboardReadWrite", CEF_CONTENT_SETTING_TYPE_CLIPBOARD_READ_WRITE},
+    {"clipboardSanitizedWrite", CEF_CONTENT_SETTING_TYPE_CLIPBOARD_SANITIZED_WRITE},
+    {"backgroundSync", CEF_CONTENT_SETTING_TYPE_BACKGROUND_SYNC},
+    {"paymentHandler", CEF_CONTENT_SETTING_TYPE_PAYMENT_HANDLER},
+    {"sensors", CEF_CONTENT_SETTING_TYPE_SENSORS},
+    {"localFonts", CEF_CONTENT_SETTING_TYPE_LOCAL_FONTS},
+    {"idleDetection", CEF_CONTENT_SETTING_TYPE_IDLE_DETECTION},
+    {"windowManagement", CEF_CONTENT_SETTING_TYPE_WINDOW_MANAGEMENT},
+};
+
+void chromium_context_set_permissions(chromium_context *context, const char *origin, const char *const *names,
+                                      int count) {
+    if (!context || context->global || !origin || !origin[0] || !glue_running()) return;
+    cef_request_context_t *made = context_take(context);
+    if (!made) return;
+    cef_string_t url = {0};
+    glue_set(&url, origin);
+    for (size_t i = 0; i < sizeof permission_settings / sizeof *permission_settings; i++) {
+        cef_content_setting_values_t value = CEF_CONTENT_SETTING_VALUE_DEFAULT;
+        if (names) {
+            value = CEF_CONTENT_SETTING_VALUE_BLOCK;
+            for (int n = 0; n < count; n++) {
+                if (names[n] && strcmp(names[n], permission_settings[i].name) == 0) value = CEF_CONTENT_SETTING_VALUE_ALLOW;
+            }
+        }
+        made->set_content_setting(made, &url, &url, permission_settings[i].type, value);
+    }
+    cef_string_utf16_clear(&url);
+    GLUE_RELEASE(made);
+}
+
 // Cookies are written to disk a while after they change; on the way out
 // they are written at once, or a sign-in made just before quitting is lost.
 static cef_completion_callback_t flushed;
@@ -139,7 +217,9 @@ void glue_contexts_stop(void) {
 
 // MARK: - Pages
 
-enum { WAITING, MAKING, LIVE, CLOSED };
+// OPENING: made for a popup, waiting for Chromium to make its browser
+// (before_popup), which it does itself, with the opener's context.
+enum { WAITING, OPENING, MAKING, LIVE, CLOSED };
 
 struct script {
     char *code;
@@ -155,6 +235,12 @@ struct chromium_page {
     cef_download_handler_t download;
     cef_audio_handler_t audio;
     cef_focus_handler_t focus;
+    cef_context_menu_handler_t menu;
+    cef_dialog_handler_t files;
+    cef_jsdialog_handler_t questions;
+    cef_keyboard_handler_t keys;
+    cef_permission_handler_t permissions;
+    cef_dev_tools_message_observer_t observer;
     atomic_int refs;
 
     chromium_events events;
@@ -182,6 +268,22 @@ struct chromium_page {
 
     uint32_t *reported;
     int reported_count;
+
+    /// The question the page is waiting on (the `dialog` event), until it
+    /// is answered or taken back.
+    cef_jsdialog_callback_t *question;
+    /// A permission being asked about (the `permission` event answered 2).
+    cef_media_access_callback_t *media_pending;
+    uint32_t media_kinds;
+    cef_permission_prompt_callback_t *prompt_pending;
+    uint64_t prompt_id;
+    /// While its DevTools target is being asked for (query_target).
+    cef_registration_t *observing;
+    int target_query, target_tries;
+    /// For a popup page: which popup of which opener it is, until its
+    /// browser is made or the popup is given up (popup_aborted).
+    int popup_id, opener;
+    struct chromium_page *popup_next;
 
     struct chromium_page *next;
 };
@@ -243,6 +345,12 @@ COUNTED(request)
 COUNTED(download)
 COUNTED(audio)
 COUNTED(focus)
+COUNTED(menu)
+COUNTED(files)
+COUNTED(questions)
+COUNTED(keys)
+COUNTED(permissions)
+COUNTED(observer)
 
 /// Tells Swift, unless Swift has closed the page.
 #define EMIT(page, name, ...)                                                               \
@@ -582,6 +690,7 @@ void chromium_page_close(chromium_page *page) {
             page_end(page);
         });
         break;
+    case OPENING:
     case MAKING:
         // on_after_created closes it.
         break;
@@ -601,9 +710,7 @@ void chromium_page_close(chromium_page *page) {
     }
 }
 
-chromium_page *chromium_page_make(void *view, const char *url, chromium_context *context,
-                                  const chromium_events *events) {
-    if (!glue_running() || !view) return NULL;
+static chromium_page *page_alloc(void *view, const chromium_events *events) {
     chromium_page *page = calloc(1, sizeof *page);
     client_count(page);
     life_count(page);
@@ -613,15 +720,35 @@ chromium_page *chromium_page_make(void *view, const char *url, chromium_context 
     download_count(page);
     audio_count(page);
     focus_count(page);
+    menu_count(page);
+    files_count(page);
+    questions_count(page);
+    keys_count(page);
+    permissions_count(page);
+    observer_count(page);
     atomic_store(&page->refs, 1);
     dress(page);
     if (events) page->events = *events;
     page->view = (void *)CFRetain((CFTypeRef)view);
+    page->muted = -1;
+    page->last = &page->scripts;
+    return page;
+}
+
+chromium_page *chromium_page_make_popup(void *view, const chromium_events *events) {
+    if (!glue_running() || !view) return NULL;
+    chromium_page *page = page_alloc(view, events);
+    page->state = OPENING;
+    return page;
+}
+
+chromium_page *chromium_page_make(void *view, const char *url, chromium_context *context,
+                                  const chromium_events *events) {
+    if (!glue_running() || !view) return NULL;
+    chromium_page *page = page_alloc(view, events);
     page->context = context ? context : chromium_context_global();
     context_hold(page->context);
     page->url = url ? strdup(url) : NULL;
-    page->muted = -1;
-    page->last = &page->scripts;
     if (glue_ready()) {
         page_create(page);
     } else {
@@ -676,6 +803,36 @@ static cef_focus_handler_t *CEF_CALLBACK get_focus(cef_client_t *self) {
     return &page->focus;
 }
 
+static cef_context_menu_handler_t *CEF_CALLBACK get_menu(cef_client_t *self) {
+    chromium_page *page = PAGE_OF(self, client);
+    menu_add_ref(&page->menu.base);
+    return &page->menu;
+}
+
+static cef_dialog_handler_t *CEF_CALLBACK get_files(cef_client_t *self) {
+    chromium_page *page = PAGE_OF(self, client);
+    files_add_ref(&page->files.base);
+    return &page->files;
+}
+
+static cef_jsdialog_handler_t *CEF_CALLBACK get_questions(cef_client_t *self) {
+    chromium_page *page = PAGE_OF(self, client);
+    questions_add_ref(&page->questions.base);
+    return &page->questions;
+}
+
+static cef_keyboard_handler_t *CEF_CALLBACK get_keys(cef_client_t *self) {
+    chromium_page *page = PAGE_OF(self, client);
+    keys_add_ref(&page->keys.base);
+    return &page->keys;
+}
+
+static cef_permission_handler_t *CEF_CALLBACK get_permissions(cef_client_t *self) {
+    chromium_page *page = PAGE_OF(self, client);
+    permissions_add_ref(&page->permissions.base);
+    return &page->permissions;
+}
+
 // MARK: Life
 
 /// What a link that wants somewhere else of its own gets: a tab, a window
@@ -697,6 +854,18 @@ static int destination(cef_window_open_disposition_t disposition) {
     }
 }
 
+/// Popup pages handed to Chromium, waiting for their browsers.
+static chromium_page *popups;
+
+static void popup_forget(chromium_page *made) {
+    for (chromium_page **link = &popups; *link; link = &(*link)->popup_next) {
+        if (*link != made) continue;
+        *link = made->popup_next;
+        made->popup_next = NULL;
+        return;
+    }
+}
+
 static int CEF_CALLBACK before_popup(cef_life_span_handler_t *self, cef_browser_t *browser, cef_frame_t *frame,
                                      int popup_id, const cef_string_t *url, const cef_string_t *name,
                                      cef_window_open_disposition_t disposition, int gesture,
@@ -705,25 +874,62 @@ static int CEF_CALLBACK before_popup(cef_life_span_handler_t *self, cef_browser_
                                      cef_dictionary_value_t **extra, int *no_script) {
     chromium_page *page = PAGE_OF(self, life);
     int cancel = 1;
-    int where = gesture ? destination(disposition) : NOTHING;
-    // Nothing opens without a click behind it, as Chrome blocks popups.
-    if (where == TAB || where == BACKGROUND_TAB) {
+    // Nothing opens without a click behind it, as Chrome blocks popups —
+    // except while a tool drives the page: Playwright's Chrome blocks none.
+    int where = gesture || glue_automation() ? destination(disposition) : NOTHING;
+    // The client that came in (this page's) is ours to release, whatever
+    // takes its place.
+    cef_client_t *incoming = client ? *client : NULL;
+    chromium_page *made = NULL;
+    if (where != NOTHING && page->events.popup) {
+        // A tab of Search's, made now, for Chromium to make the popup in:
+        // made by Chromium, it keeps its opener, the POST body it was sent
+        // with, the copy of sessionStorage and everything else a popup has,
+        // and tools see whose popup it is.
+        if (!page->asked && client && window) {
+            char *text = glue_utf8(url);
+            int kind = where == TAB ? CHROMIUM_POPUP_TAB
+                     : where == BACKGROUND_TAB ? CHROMIUM_POPUP_BACKGROUND_TAB
+                     : CHROMIUM_POPUP_WINDOW;
+            made = page->events.popup(page->events.context, text, kind, gesture);
+            free(text);
+            if (made && made->state != OPENING) made = NULL;
+        }
+    } else if (where == TAB || where == BACKGROUND_TAB) {
         char *text = glue_utf8(url);
         if (text[0]) EMIT(page, tab, text, where == TAB);
         free(text);
     }
-    // The client that came in (this page's) is ours to release. A popup's
-    // events must never reach this page's tab: it gets a client of its
-    // own, in a window of its own, carrying a reference for Chromium.
-    cef_client_t *incoming = client ? *client : NULL;
-    if (incoming) GLUE_RELEASE(incoming);
-    if (where == POPUP && client) {
-        cef_client_t *loose = glue_loose_client();
-        if (incoming != loose) {
-            GLUE_ADD_REF(loose);
-            *client = loose;
-        }
+    if (made) {
+        NSView *container = (__bridge NSView *)made->view;
+        NSRect bounds = container.bounds;
+        window->bounds = (cef_rect_t){0, 0, (int)NSWidth(bounds), (int)NSHeight(bounds)};
+        window->parent_view = made->view;
+        window->runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+        if (incoming) GLUE_RELEASE(incoming);
+        // Chromium's reference, as page_create gives one.
+        client_add_ref(&made->client.base);
+        *client = &made->client;
+        made->state = MAKING;
+        making++;
+        made->popup_id = popup_id;
+        made->opener = browser->get_identifier(browser);
+        made->popup_next = popups;
+        popups = made;
         cancel = 0;
+    } else {
+        // A popup's events must never reach this page's tab: with no page
+        // of Search's for it, it gets a client of its own, in a window of
+        // its own, carrying a reference for Chromium.
+        if (incoming) GLUE_RELEASE(incoming);
+        if (where == POPUP && !page->events.popup && client) {
+            cef_client_t *loose = glue_loose_client();
+            if (incoming != loose) {
+                GLUE_ADD_REF(loose);
+                *client = loose;
+            }
+            cancel = 0;
+        }
     }
     if (extra && *extra) GLUE_RELEASE(*extra);
     GLUE_RELEASE(frame);
@@ -731,8 +937,28 @@ static int CEF_CALLBACK before_popup(cef_life_span_handler_t *self, cef_browser_
     return cancel;
 }
 
+/// A popup Chromium gave up on before its browser was made: its page ends.
+static void CEF_CALLBACK popup_aborted(cef_life_span_handler_t *self, cef_browser_t *browser, int popup_id) {
+    int opener = browser->get_identifier(browser);
+    for (chromium_page *made = popups; made; made = made->popup_next) {
+        if (made->popup_id != popup_id || made->opener != opener) continue;
+        popup_forget(made);
+        making--;
+        made->state = CLOSED;
+        glue_later(^{
+            page_end(made);
+        });
+        break;
+    }
+    GLUE_RELEASE(browser);
+}
+
+static void query_target(chromium_page *page, cef_browser_host_t *host);
+static void permissions_drop(chromium_page *page);
+
 static void CEF_CALLBACK after_created(cef_life_span_handler_t *self, cef_browser_t *browser) {
     chromium_page *page = PAGE_OF(self, life);
+    popup_forget(page);
     making--;
     // The reference it came with is the page's now.
     page->browser = browser;
@@ -774,6 +1000,7 @@ static void CEF_CALLBACK after_created(cef_life_span_handler_t *self, cef_browse
     if (page->print_wanted) host->print(host);
     if (page->inspect_wanted) show_inspector(page);
     page->focus_wanted = page->print_wanted = page->inspect_wanted = 0;
+    query_target(page, host);
     GLUE_RELEASE(host);
     EMIT(page, created);
 }
@@ -793,6 +1020,18 @@ static int CEF_CALLBACK do_close(cef_life_span_handler_t *self, cef_browser_t *b
 
 static void CEF_CALLBACK before_close(cef_life_span_handler_t *self, cef_browser_t *browser) {
     chromium_page *page = PAGE_OF(self, life);
+    if (page->question) {
+        GLUE_RELEASE(page->question);
+        page->question = NULL;
+    }
+    permissions_drop(page);
+    if (page->observing) {
+        cef_registration_t *registration = page->observing;
+        page->observing = NULL;
+        glue_later(^{
+            GLUE_RELEASE(registration);
+        });
+    }
     glue_unregister(browser);
     GLUE_RELEASE(page->browser);
     page->browser = NULL;
@@ -1001,6 +1240,16 @@ static int reported(chromium_page *page, uint32_t id) {
 static void CEF_CALLBACK download_updated(cef_download_handler_t *self, cef_browser_t *browser,
                                           cef_download_item_t *item, cef_download_item_callback_t *callback) {
     chromium_page *page = PAGE_OF(self, download);
+    const chromium_downloads *hooks = glue_downloads();
+    if (hooks->progress) {
+        int state = item->is_complete(item) ? CHROMIUM_DOWNLOAD_DONE
+                  : item->is_canceled(item) || item->is_interrupted(item) ? CHROMIUM_DOWNLOAD_STOPPED
+                  : CHROMIUM_DOWNLOAD_GOING;
+        if (hooks->progress(browser->get_identifier(browser), item->get_id(item), item->get_received_bytes(item),
+                            item->get_total_bytes(item), state) && state == CHROMIUM_DOWNLOAD_GOING) {
+            callback->cancel(callback);
+        }
+    }
     if (item->is_complete(item) && !reported(page, item->get_id(item))) {
         char *file = glue_take(item->get_full_path(item));
         char *source = glue_take(item->get_url(item));
@@ -1033,6 +1282,312 @@ static void CEF_CALLBACK got_focus(cef_focus_handler_t *self, cef_browser_t *bro
     GLUE_RELEASE(browser);
 }
 
+// MARK: Questions
+
+static int ask(chromium_page *page, int kind, const cef_string_t *origin, const cef_string_t *message,
+               const cef_string_t *text, int reload, cef_jsdialog_callback_t *callback) {
+    if (page->asked || !page->events.dialog) {
+        GLUE_RELEASE(callback);
+        return 0;
+    }
+    char *from = glue_utf8(origin), *said = glue_utf8(message), *answer = glue_utf8(text);
+    // Kept before Swift hears: it may answer at once (a test run does).
+    page->question = callback;
+    int handled = page->events.dialog(page->events.context, kind, from, said, answer, reload);
+    if (!handled && page->question == callback) {
+        page->question = NULL;
+        GLUE_RELEASE(callback);
+    }
+    free(from);
+    free(said);
+    free(answer);
+    return handled;
+}
+
+static int CEF_CALLBACK run_question(cef_jsdialog_handler_t *self, cef_browser_t *browser, const cef_string_t *origin,
+                                     cef_jsdialog_type_t type, const cef_string_t *message,
+                                     const cef_string_t *prompt, cef_jsdialog_callback_t *callback, int *suppress) {
+    chromium_page *page = PAGE_OF(self, questions);
+    int handled = 0;
+    if (suppress) *suppress = 0;
+    if (page->question) {
+        // One at a time, as Chrome asks them: another while one waits is
+        // dropped, which is what Chromium's own dialogs do.
+        if (suppress) *suppress = 1;
+        GLUE_RELEASE(callback);
+    } else {
+        int kind = type == JSDIALOGTYPE_CONFIRM ? CHROMIUM_DIALOG_CONFIRM
+                 : type == JSDIALOGTYPE_PROMPT ? CHROMIUM_DIALOG_PROMPT
+                 : CHROMIUM_DIALOG_ALERT;
+        handled = ask(page, kind, origin, message, prompt, 0, callback);
+    }
+    GLUE_RELEASE(browser);
+    return handled;
+}
+
+static int CEF_CALLBACK run_leave_question(cef_jsdialog_handler_t *self, cef_browser_t *browser,
+                                           const cef_string_t *message, int reload,
+                                           cef_jsdialog_callback_t *callback) {
+    chromium_page *page = PAGE_OF(self, questions);
+    int handled = 0;
+    if (page->question) {
+        GLUE_RELEASE(callback);
+    } else {
+        handled = ask(page, CHROMIUM_DIALOG_LEAVE, NULL, message, NULL, reload, callback);
+    }
+    GLUE_RELEASE(browser);
+    return handled;
+}
+
+/// The question went some other way: a navigation took it back, or a tool
+/// answered it over DevTools. What shows it goes too.
+static void question_gone(chromium_page *page) {
+    if (!page->question) return;
+    GLUE_RELEASE(page->question);
+    page->question = NULL;
+    EMIT(page, dialog_gone);
+}
+
+static void CEF_CALLBACK questions_reset(cef_jsdialog_handler_t *self, cef_browser_t *browser) {
+    question_gone(PAGE_OF(self, questions));
+    GLUE_RELEASE(browser);
+}
+
+static void CEF_CALLBACK question_closed(cef_jsdialog_handler_t *self, cef_browser_t *browser) {
+    // Answered here, the question is already let go of; still held, it was
+    // answered elsewhere.
+    question_gone(PAGE_OF(self, questions));
+    GLUE_RELEASE(browser);
+}
+
+void chromium_page_forget_question(chromium_page *page) {
+    if (!page || !page->question) return;
+    GLUE_RELEASE(page->question);
+    page->question = NULL;
+}
+
+void chromium_page_answer(chromium_page *page, int ok, const char *text) {
+    if (!page || !page->question) return;
+    cef_jsdialog_callback_t *callback = page->question;
+    page->question = NULL;
+    cef_string_t answer = {0};
+    glue_set(&answer, text);
+    callback->cont(callback, ok ? 1 : 0, &answer);
+    cef_string_utf16_clear(&answer);
+    GLUE_RELEASE(callback);
+}
+
+// MARK: Menus, panels and keys a tool didn't mean to open
+
+static void CEF_CALLBACK before_menu(cef_context_menu_handler_t *self, cef_browser_t *browser, cef_frame_t *frame,
+                                     cef_context_menu_params_t *params, cef_menu_model_t *model) {
+    // A right click a tool sent: the page has had its contextmenu event,
+    // and no menu of the app's opens over it.
+    if (glue_automation() && glue_real_age(CHROMIUM_REAL_RIGHT) > 1.0) model->clear(model);
+    GLUE_RELEASE(model);
+    GLUE_RELEASE(params);
+    GLUE_RELEASE(frame);
+    GLUE_RELEASE(browser);
+}
+
+static int CEF_CALLBACK file_dialog(cef_dialog_handler_t *self, cef_browser_t *browser, cef_file_dialog_mode_t mode,
+                                    const cef_string_t *title, const cef_string_t *path, cef_string_list_t filters,
+                                    cef_string_list_t extensions, cef_string_list_t descriptions,
+                                    cef_file_dialog_callback_t *callback) {
+    // A file input a tool clicked: cancelled, with no panel on anybody's
+    // screen. One the tool watches for (Page.setInterceptFileChooserDialog)
+    // never comes here.
+    int handled = 0;
+    if (glue_automation() && glue_real_age(CHROMIUM_REAL_MOUSE) > 1.0 && glue_real_age(CHROMIUM_REAL_KEY) > 1.0) {
+        callback->cancel(callback);
+        handled = 1;
+    }
+    GLUE_RELEASE(callback);
+    GLUE_RELEASE(browser);
+    return handled;
+}
+
+static int CEF_CALLBACK key_event(cef_keyboard_handler_t *self, cef_browser_t *browser, const cef_key_event_t *event,
+                                  cef_event_handle_t os_event) {
+    // A key the page left alone goes on to the app's menus — ⌘W closes
+    // the tab — unless a tool sent it: taken here, it goes nowhere.
+    int taken = glue_automation() && !glue_real_key(os_event);
+    GLUE_RELEASE(browser);
+    return taken;
+}
+
+// MARK: Permissions
+
+/// A media request still waiting is refused, and a prompt dismissed: a
+/// page asks one thing at a time.
+static void permissions_drop(chromium_page *page) {
+    if (page->media_pending) {
+        page->media_pending->cancel(page->media_pending);
+        GLUE_RELEASE(page->media_pending);
+        page->media_pending = NULL;
+    }
+    if (page->prompt_pending) {
+        page->prompt_pending->cont(page->prompt_pending, CEF_PERMISSION_RESULT_DISMISS);
+        GLUE_RELEASE(page->prompt_pending);
+        page->prompt_pending = NULL;
+    }
+}
+
+static int CEF_CALLBACK media_access(cef_permission_handler_t *self, cef_browser_t *browser, cef_frame_t *frame,
+                                     const cef_string_t *origin, uint32_t kinds,
+                                     cef_media_access_callback_t *callback) {
+    chromium_page *page = PAGE_OF(self, permissions);
+    int answer = -1;
+    if (!page->asked && page->events.permission) {
+        char *from = glue_utf8(origin);
+        // Kept first: Swift may answer at once.
+        if (page->media_pending) permissions_drop(page);
+        page->media_pending = callback;
+        page->media_kinds = kinds;
+        GLUE_ADD_REF(callback);
+        answer = page->events.permission(page->events.context, from, 1, kinds);
+        free(from);
+        if (answer != 2 && page->media_pending == callback) {
+            page->media_pending = NULL;
+            GLUE_RELEASE(callback);
+        }
+    }
+    if (answer == 1) {
+        callback->cont(callback, kinds);
+    } else if (answer == 0) {
+        callback->cancel(callback);
+    }
+    GLUE_RELEASE(callback);
+    GLUE_RELEASE(frame);
+    GLUE_RELEASE(browser);
+    return answer >= 0;
+}
+
+static int CEF_CALLBACK permission_prompt(cef_permission_handler_t *self, cef_browser_t *browser, uint64_t prompt,
+                                          const cef_string_t *origin, uint32_t kinds,
+                                          cef_permission_prompt_callback_t *callback) {
+    chromium_page *page = PAGE_OF(self, permissions);
+    int answer = -1;
+    if (!page->asked && page->events.permission) {
+        char *from = glue_utf8(origin);
+        if (page->prompt_pending) permissions_drop(page);
+        page->prompt_pending = callback;
+        page->prompt_id = prompt;
+        GLUE_ADD_REF(callback);
+        answer = page->events.permission(page->events.context, from, 0, kinds);
+        free(from);
+        if (answer != 2 && page->prompt_pending == callback) {
+            page->prompt_pending = NULL;
+            GLUE_RELEASE(callback);
+        }
+    }
+    if (answer == 0 || answer == 1) {
+        callback->cont(callback, answer == 1 ? CEF_PERMISSION_RESULT_ACCEPT : CEF_PERMISSION_RESULT_DENY);
+    }
+    GLUE_RELEASE(callback);
+    GLUE_RELEASE(browser);
+    return answer >= 0;
+}
+
+static void CEF_CALLBACK permission_dismissed(cef_permission_handler_t *self, cef_browser_t *browser, uint64_t prompt,
+                                              cef_permission_request_result_t result) {
+    chromium_page *page = PAGE_OF(self, permissions);
+    // Chromium gave up on it (the page went elsewhere): nothing to answer.
+    if (page->prompt_pending && page->prompt_id == prompt) {
+        GLUE_RELEASE(page->prompt_pending);
+        page->prompt_pending = NULL;
+    }
+    GLUE_RELEASE(browser);
+}
+
+void chromium_page_permit(chromium_page *page, int media, int granted) {
+    if (!page) return;
+    if (media && page->media_pending) {
+        cef_media_access_callback_t *callback = page->media_pending;
+        page->media_pending = NULL;
+        if (granted) {
+            callback->cont(callback, page->media_kinds);
+        } else {
+            callback->cancel(callback);
+        }
+        GLUE_RELEASE(callback);
+    } else if (!media && page->prompt_pending) {
+        cef_permission_prompt_callback_t *callback = page->prompt_pending;
+        page->prompt_pending = NULL;
+        callback->cont(callback, granted ? CEF_PERMISSION_RESULT_ACCEPT : CEF_PERMISSION_RESULT_DENY);
+        GLUE_RELEASE(callback);
+    }
+}
+
+// MARK: Its DevTools target
+
+/// A string value in a JSON text, by key: enough for ids, which have no
+/// escapes. malloc'd, or NULL.
+static char *json_string(const char *json, size_t size, const char *key) {
+    if (!json || !size) return NULL;
+    size_t length = strlen(key);
+    for (size_t at = 0; at + length + 2 < size; at++) {
+        if (json[at] != '"' || strncmp(json + at + 1, key, length) != 0 || json[at + 1 + length] != '"') continue;
+        size_t cursor = at + length + 2;
+        while (cursor < size && (json[cursor] == ' ' || json[cursor] == ':' || json[cursor] == '\n')) cursor++;
+        if (cursor >= size || json[cursor] != '"') return NULL;
+        size_t start = ++cursor;
+        while (cursor < size && json[cursor] != '"' && json[cursor] != '\\') cursor++;
+        if (cursor >= size || json[cursor] != '"') return NULL;
+        return strndup(json + start, cursor - start);
+    }
+    return NULL;
+}
+
+/// Asks the page's own DevTools agent which target it is — no remote
+/// session needed — so the tab and the target a tool drives are matched
+/// exactly (see DevToolsBridge.swift).
+static void query_target(chromium_page *page, cef_browser_host_t *host) {
+    if (!page->events.target || page->asked) return;
+    if (!page->observing) {
+        observer_add_ref(&page->observer.base);
+        page->observing = host->add_dev_tools_message_observer(host, &page->observer);
+    }
+    cef_string_t method = {0};
+    glue_set(&method, "Target.getTargetInfo");
+    page->target_query = host->execute_dev_tools_method(host, 0, &method, NULL);
+    cef_string_utf16_clear(&method);
+}
+
+static void CEF_CALLBACK devtools_result(cef_dev_tools_message_observer_t *self, cef_browser_t *browser, int id,
+                                         int success, const void *result, size_t size) {
+    chromium_page *page = PAGE_OF(self, observer);
+    if (id != 0 && id == page->target_query) {
+        page->target_query = 0;
+        char *target = success ? json_string(result, size, "targetId") : NULL;
+        char *context = success ? json_string(result, size, "browserContextId") : NULL;
+        if (target) {
+            EMIT(page, target, target, context ? context : "", browser->get_identifier(browser));
+            cef_registration_t *registration = page->observing;
+            page->observing = NULL;
+            glue_later(^{
+                GLUE_RELEASE(registration);
+            });
+        } else if (page->target_tries++ < 3) {
+            // The agent wasn't up yet: again in a moment, the page held.
+            client_add_ref(&page->client.base);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                if (page_usable(page) && page_live(page)) {
+                    cef_browser_host_t *host = page_host(page);
+                    if (host) {
+                        query_target(page, host);
+                        GLUE_RELEASE(host);
+                    }
+                }
+                page_release(page);
+            });
+        }
+        free(target);
+        free(context);
+    }
+    GLUE_RELEASE(browser);
+}
+
 static void dress(chromium_page *page) {
     page->client.get_life_span_handler = get_life;
     page->client.get_display_handler = get_display;
@@ -1041,8 +1596,14 @@ static void dress(chromium_page *page) {
     page->client.get_download_handler = get_download;
     page->client.get_audio_handler = get_audio;
     page->client.get_focus_handler = get_focus;
+    page->client.get_context_menu_handler = get_menu;
+    page->client.get_dialog_handler = get_files;
+    page->client.get_jsdialog_handler = get_questions;
+    page->client.get_keyboard_handler = get_keys;
+    page->client.get_permission_handler = get_permissions;
 
     page->life.on_before_popup = before_popup;
+    page->life.on_before_popup_aborted = popup_aborted;
     page->life.on_after_created = after_created;
     page->life.do_close = do_close;
     page->life.on_before_close = before_close;
@@ -1070,4 +1631,16 @@ static void dress(chromium_page *page) {
     page->audio.get_audio_parameters = audio_parameters;
 
     page->focus.on_got_focus = got_focus;
+
+    page->menu.on_before_context_menu = before_menu;
+    page->files.on_file_dialog = file_dialog;
+    page->questions.on_jsdialog = run_question;
+    page->questions.on_before_unload_dialog = run_leave_question;
+    page->questions.on_reset_dialog_state = questions_reset;
+    page->questions.on_dialog_closed = question_closed;
+    page->keys.on_key_event = key_event;
+    page->permissions.on_request_media_access_permission = media_access;
+    page->permissions.on_show_permission_prompt = permission_prompt;
+    page->permissions.on_dismiss_permission_prompt = permission_dismissed;
+    page->observer.on_dev_tools_method_result = devtools_result;
 }
