@@ -12,6 +12,12 @@
 #   SEARCH_ARCH=x86_64 ./build.sh release ship
 #                              the same for Intel Macs, into build/intel/
 #
+#   SEARCH_BETA=1 ./build.sh   build/Search Beta.app: a second app beside
+#                                Search, with its own identifier, folder,
+#                                settings and sign-ins, that never updates
+#                                itself (Store.beta). ./beta.sh builds and
+#                                installs it. App only: no DMG, no feed.
+#
 # Same shape as the one next door: SwiftPM builds the executable, and a macOS
 # app bundle is just a folder with a plist and the binary in the right place.
 #
@@ -54,6 +60,16 @@ case "$ARCH" in
 esac
 APP="$OUT/Search.app"
 NAME="Search"
+IDENTIFIER="com.officecommun.search"
+# The executable keeps its name in both apps; only the bundle around it
+# differs.
+EXECUTABLE="Search"
+if [ -n "${SEARCH_BETA:-}" ]; then
+  [ "$STEP" = "app" ] || { echo "Search Beta is built as an app only, never shipped" >&2; exit 1; }
+  NAME="Search Beta"
+  APP="$OUT/$NAME.app"
+  IDENTIFIER="com.officecommun.search.beta"
+fi
 VERSION="$(tr -d '[:space:]' < VERSION)"
 # A build number that only ever goes up, so the updater can tell newer from
 # older without parsing version strings.
@@ -73,7 +89,7 @@ BINARY="$(swift build "${SWIFTFLAGS[@]}" --show-bin-path)/Search"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BINARY" "$APP/Contents/MacOS/$NAME"
+cp "$BINARY" "$APP/Contents/MacOS/$EXECUTABLE"
 # The AppleScript dictionary (Scripting.swift): read-only, tabs' addresses
 # and titles. The plist below points to it.
 cp Search.sdef "$APP/Contents/Resources/"
@@ -87,7 +103,7 @@ cp Search.sdef "$APP/Contents/Resources/"
 if [ "$CONFIG" = "release" ]; then
   rm -rf "$APP.dSYM"
   dsymutil "$BINARY" -o "$APP.dSYM" 2>/dev/null || echo "no dSYM this time" >&2
-  strip -x "$APP/Contents/MacOS/$NAME"
+  strip -x "$APP/Contents/MacOS/$EXECUTABLE"
 fi
 
 # The icon, drawn fresh each time — it is thirty lines of Swift, not an asset
@@ -133,8 +149,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
   <key>CFBundleName</key><string>$NAME</string>
   <key>CFBundleDisplayName</key><string>$NAME</string>
-  <key>CFBundleExecutable</key><string>$NAME</string>
-  <key>CFBundleIdentifier</key><string>com.officecommun.search</string>
+  <key>CFBundleExecutable</key><string>$EXECUTABLE</string>
+  <key>CFBundleIdentifier</key><string>$IDENTIFIER</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$BUILD</string>
@@ -205,7 +221,8 @@ IDENTITY="${SEARCH_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/
 # this script, both go in; without it, the app is signed as before, because
 # a restricted entitlement with no profile behind it is an app that won't open.
 ENTITLEMENTS="Search.entitlements"
-if [ -f "Search.provisionprofile" ]; then
+# The profile names Search's identifier, so the beta goes without passkeys.
+if [ -f "Search.provisionprofile" ] && [ -z "${SEARCH_BETA:-}" ]; then
   cp "Search.provisionprofile" "$APP/Contents/embedded.provisionprofile"
   ENTITLEMENTS="Search.passkeys.entitlements"
   echo "passkeys: profile embedded"

@@ -6,7 +6,8 @@
 #
 #   ./chromium.sh                    build build/chromium/addon/<version>/ and its zip
 #   ./chromium.sh install [world]    copy it into the test world "Search (<world>)",
-#                                    "test" unless named; --real for your own Search
+#                                    "test" unless named; --real for your own Search,
+#                                    --beta for Search Beta
 #   ./chromium.sh test [port]        run the smoke test against the test world's copy
 #
 # From CEF's minimal distribution for macOS arm64, at one pinned version,
@@ -105,17 +106,20 @@ sign() {
 }
 
 place() {
-  local world="test" real=0 argument
+  local world="test" real=0 beta=0 argument
   for argument in "$@"; do
     case "$argument" in
       --real) real=1 ;;
-      -*) echo "usage: ./chromium.sh install [world] [--real]" >&2; exit 1 ;;
+      --beta) beta=1 ;;
+      -*) echo "usage: ./chromium.sh install [world] [--real | --beta]" >&2; exit 1 ;;
       *) world="$argument" ;;
     esac
   done
   [ -d "$ADDON" ] || { echo "no add-on in $ADDON — run ./chromium.sh first" >&2; exit 1; }
   local support="$HOME/Library/Application Support" folder
-  if [ "$real" = 1 ]; then
+  if [ "$beta" = 1 ]; then
+    folder="$support/Search Beta/Chromium"
+  elif [ "$real" = 1 ]; then
     folder="$support/Search/Chromium"
   else
     # As Store.world spells it: letters, digits and dashes, lower case.
@@ -154,5 +158,5 @@ case "${1:-build}" in
   build) build ;;
   install) shift; place "$@" ;;
   test) shift; smoke "$@" ;;
-  *) echo "usage: ./chromium.sh [build | install [world] [--real] | test [port]]" >&2; exit 1 ;;
+  *) echo "usage: ./chromium.sh [build | install [world] [--real | --beta] | test [port]]" >&2; exit 1 ;;
 esac

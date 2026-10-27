@@ -19,6 +19,13 @@ enum Store {
         return Bundle.main.executablePath?.contains("/.build/") == true
     }
 
+    /// Search Beta (SEARCH_BETA=1 ./build.sh): a second app beside Search,
+    /// for trying what isn't released. It keeps everything apart — its own
+    /// folder, settings (defaults follow the bundle identifier), WebKit
+    /// container, Chromium profile and saved passwords — and never updates
+    /// itself, since the feed only carries Search.
+    static let beta = Bundle.main.bundleIdentifier == "com.officecommun.search.beta"
+
     /// Which test world a test run lives in. SEARCH_PROBE=1, or a run from
     /// the build folder, is the test world, "Search (test)". SEARCH_PROBE=
     /// <name> is a world of its own, "Search (<name>)", with settings and
@@ -110,8 +117,9 @@ enum Store {
     static let folder: URL = {
         let support = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let home = support.appendingPathComponent(world.map { "Search (\($0))" } ?? "Search", isDirectory: true)
-        if !testing {
+        let home = support.appendingPathComponent(world.map { "Search (\($0))" } ?? (beta ? "Search Beta" : "Search"),
+                                                  isDirectory: true)
+        if !testing, !beta {
             let old = support.appendingPathComponent("Office Browser", isDirectory: true)
             let files = FileManager.default
             if !files.fileExists(atPath: home.path), files.fileExists(atPath: old.path) {

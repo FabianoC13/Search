@@ -79,8 +79,9 @@ enum ChromiumRuntime {
         // A key of Search's own for cookies' encryption, not Chrome's: no
         // keychain prompt naming another app. A test run keeps it in memory,
         // since a build signed ad hoc is a stranger to the keychain each time.
-        options.keychain_service = text("Search Chromium Safe Storage")
-        options.keychain_account = text("Search Chromium")
+        let name = Store.beta ? "Search Beta Chromium" : "Search Chromium"
+        options.keychain_service = text("\(name) Safe Storage")
+        options.keychain_account = text(name)
         // Chromium's own server is one port up; the port asked for is the
         // bridge's (DevToolsBridge), so a tool's new pages are Search's tabs.
         options.port = Int32(port > 0 ? port + 1 : 0)
