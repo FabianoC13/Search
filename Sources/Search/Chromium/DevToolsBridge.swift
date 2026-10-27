@@ -67,7 +67,7 @@ final class DevToolsBridge {
         case "Target.createTarget":
             // A context of the tool's own (newContext) stays Chromium's:
             // Search has no window for it.
-            guard params["browserContextId"] == nil, let browser = Browser.front else { return false }
+            guard params["browserContextId"] == nil, let browser = Browsers.front else { return false }
             let url = (params["url"] as? String).flatMap(URL.init(string:)) ?? URL(string: "about:blank")!
             let background = params["background"] as? Bool ?? false
             var tab: Tab?
