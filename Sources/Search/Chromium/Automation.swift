@@ -80,7 +80,8 @@ final class Automation {
                             what: names.count == 1 ? "is controlling Search" : "are controlling Search",
                             automation: true)
             : nil
-        RecordingIndicator.shared.automation(line)
+        // Unseen when Playwright started Search headless.
+        RecordingIndicator.shared.automation(Launch.headless ? nil : line)
         watchYourPointer(connected)
         watchMenus(connected)
     }

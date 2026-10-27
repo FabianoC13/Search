@@ -19,9 +19,9 @@ struct SearchApp: App {
     private var browser: Browser { front.browser ?? SceneSlot.shared.browser }
 
     init() {
-        // Started by Playwright headless, which Search can't be: said, and
-        // stopped, before anything shows.
-        Launch.refuseHeadless()
+        // Started by Playwright headless: unseen, with no Dock icon or menu
+        // bar of its own (see Launch.headless).
+        if Launch.headless { NSApplication.shared.setActivationPolicy(.accessory) }
         // Which engine draws pages is settled first, once, before any window
         // and its browser are made: everything after asks it which of
         // WebKit's things it may make (see PageEngine.swift).

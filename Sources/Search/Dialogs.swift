@@ -264,8 +264,10 @@ extension Browser {
         let host = URL(string: origin)?.host() ?? origin
         let key = "\(host) \(media) \(kinds)"
         if let known = Browser.chromiumPermits[key] { return known ? 1 : 0 }
-        // A test run is never asked on a screen: refused, as cancelled.
-        if Store.testing { return 0 }
+        // A test run is never asked on a screen: refused, as cancelled. Nor
+        // a run Playwright started headless, with nobody there to answer —
+        // as headless Chrome refuses.
+        if Store.testing || Launch.headless { return 0 }
         ask(for: tab, show: { [weak page] in
             guard let page else { return }
             let alert = NSAlert()

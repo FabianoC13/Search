@@ -140,6 +140,8 @@ enum Browsers {
     /// Brings a browser's window on screen, the scene's included.
     static func show(_ browser: Browser) {
         browser.shut = false
+        // Started headless, only a window off every screen comes back.
+        if Launch.headless, !(browser.window is UnseenWindow) { return }
         if let window = browser.window {
             Bench.keepOff(window)
             window.makeKeyAndOrderFront(nil)
@@ -183,11 +185,11 @@ enum Browsers {
         let size = popup ? NSSize(width: 480, height: 600)
             : fullScreen ? NSSize(width: 1180, height: 780)
             : front?.window?.frame.size ?? NSSize(width: 1180, height: 780)
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-            backing: .buffered, defer: false
-        )
+        let rect = NSRect(origin: .zero, size: size)
+        let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        let window: NSWindow = Launch.headless
+            ? UnseenWindow(contentRect: rect, styleMask: style, backing: .buffered, defer: false)
+            : NSWindow(contentRect: rect, styleMask: style, backing: .buffered, defer: false)
         // A popup has no ContentView.dress() to tie the browser to its window;
         // tied here, before extensions hear of it (#408, lulkebit).
         browser.window = window
@@ -199,7 +201,9 @@ enum Browsers {
             window.titleVisibility = .hidden
             window.minSize = NSSize(width: 200, height: 150)
         }
-        if let frame {
+        if Launch.headless {
+            window.setFrameOrigin(UnseenWindow.away)
+        } else if let frame {
             window.setFrame(frame, display: false)
         } else if popup || fullScreen {
             window.center()
@@ -215,7 +219,7 @@ enum Browsers {
         // a window with no frame and no NSWindow behind it (#408, lulkebit).
         register(browser)
         Bench.keepOff(window)
-        if quietly {
+        if quietly || Launch.headless {
             window.orderFront(nil)
             return
         }
@@ -233,7 +237,8 @@ enum Browsers {
 
     private static func comeForward() {
         // Never a test run's: a probe started hidden stays off every screen.
-        guard !Store.testing else { return }
+        // Nor a run Playwright started headless.
+        guard !Store.testing, !Launch.headless else { return }
         if #available(macOS 14, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
     }
 
@@ -424,4 +429,14 @@ extension Browser {
         let page = active.map { $0.isBlank ? "New Tab" : $0.label } ?? "Window"
         return prefs.usesSpaces ? "\(page) — \(space.name)" : page
     }
+}
+
+/// A window off every screen, for a run Playwright started headless
+/// (Launch.headless). AppKit pulls a titled window back onto a screen as it
+/// comes in; this one stays where it is put.
+final class UnseenWindow: NSWindow {
+    /// Far off every screen.
+    static let away = NSPoint(x: -30000, y: -30000)
+
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }

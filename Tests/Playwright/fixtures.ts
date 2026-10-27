@@ -9,7 +9,8 @@ const endpoint = process.env.SEARCH_CDP ?? 'http://127.0.0.1:9222';
 // are measured against (./playwright.sh baseline).
 const app = process.env.SEARCH_APP ?? '/Applications/Search Beta.app/Contents/MacOS/Search';
 const executable = app === 'chrome' ? undefined : app;
-// Search runs headed only; headless is for a baseline run with no screen.
+// SEARCH_HEADLESS=1: headless, which for Search is unseen — Chromium as ever,
+// every window off every screen.
 const headless = process.env.SEARCH_HEADLESS === '1';
 
 /// A server on this Mac with the pages the specs need.

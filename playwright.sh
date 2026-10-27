@@ -11,14 +11,17 @@
 #   ./playwright.sh baseline [args]        the specs against Playwright's own Chromium: what
 #                                          passing means
 #   ./playwright.sh bridge                 the bridge alone, no Search built (Tests/Bridge/run.sh)
-#   ./playwright.sh suite [args]           Playwright's own tests against Search Beta, headed
-#   ./playwright.sh suite-baseline [args]  the same against Playwright's own Chromium
+#   ./playwright.sh suite [args]           Playwright's own tests against Search Beta, headless:
+#                                          unseen, every window off every screen
+#   ./playwright.sh suite-baseline [args]  the same against Playwright's own full Chromium,
+#                                          headless (channel chromium)
 #   ./playwright.sh expectations           what passed in the last suite-baseline and failed in
 #                                          the last suite, into Tests/Playwright/expectations.txt
 #   ./playwright.sh switches               Sources/Search/Chromium/PlaywrightSwitches.swift from
 #                                          the pinned release's chromiumSwitches.ts
 #
-# Args go to `playwright test`: a file, --grep, --workers. SEARCH_APP names
+# Args go to `playwright test`: a file, --grep, --workers, --headed (both
+# runs, to compare like with like). SEARCH_APP names
 # another build than /Applications/Search Beta.app. The suite is cloned and
 # built once, into build/playwright-<release>; its reports go to build/.
 set -euo pipefail
@@ -44,13 +47,13 @@ suite() {
     git clone --depth 1 --branch "v$RELEASE" https://github.com/microsoft/playwright.git "$SUITE"
   fi
   if [ ! -d "$SUITE/packages/playwright-core/lib" ]; then
-    (cd "$SUITE" && npm ci && npm run build)
+    (cd "$SUITE" && npm ci && npm run build && npx playwright install chromium ffmpeg)
   fi
   cd "$SUITE"
-  # Headed, as Search only runs; the baseline too, so the two compare.
+  # Every test, not the first 200 failures: the two runs are compared.
   PLAYWRIGHT_JSON_OUTPUT_NAME="$ROOT/build/suite-$name.json" \
-    npx playwright test --config=tests/library/playwright.config.ts --project='chromium-*' --headed \
-    --reporter=dot,json "$@"
+    npx playwright test --config=tests/library/playwright.config.ts --project='chromium-*' \
+    --max-failures=0 --reporter=dot,json "$@"
 }
 
 command="${1:-}"
@@ -70,7 +73,8 @@ case "$command" in
     [ -x "$APP" ] || { echo "no Search at $APP: ./beta.sh builds it" >&2; exit 1; }
     CRPATH="$APP" suite search "$@" ;;
   suite-baseline)
-    (unset CRPATH; suite baseline "$@") ;;
+    # Full Chromium, as Search is, not the headless shell.
+    (unset CRPATH; PWTEST_CHANNEL=chromium suite baseline "$@") ;;
   expectations)
     [ -f build/suite-baseline.json ] || { echo "no build/suite-baseline.json: ./playwright.sh suite-baseline first" >&2; exit 1; }
     [ -f build/suite-search.json ] || { echo "no build/suite-search.json: ./playwright.sh suite first" >&2; exit 1; }

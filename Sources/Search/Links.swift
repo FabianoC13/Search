@@ -86,6 +86,9 @@ final class Links: NSObject, NSApplicationDelegate {
     /// five of them meant five rebuilds of the content before the window
     /// had shown once.
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // Started headless: hidden until every window is off every screen
+        // (startForPlaywright), so the scene's window never shows.
+        if Launch.headless { NSApp.hide(nil) }
         Links.watchForTrouble()
         NSAppleEventManager.shared().setEventHandler(
             self, andSelector: #selector(handle(getURL:reply:)),
@@ -122,6 +125,7 @@ final class Links: NSObject, NSApplicationDelegate {
     /// contexts of their own, each a window.
     @MainActor
     private static func startForPlaywright(tries: Int = 0) {
+        if Launch.headless { return startUnseen() }
         let browser = SceneSlot.shared.browser
         guard let window = browser.window else {
             // The scene's window comes a moment after launch.
@@ -135,6 +139,39 @@ final class Links: NSObject, NSApplicationDelegate {
             window.orderOut(nil)
         }
     }
+
+    /// Started headless (Launch.headless): the first page in a window off
+    /// every screen, the scene's window put away for good, and only then the
+    /// app shown, without coming forward, so that Chromium paints its pages.
+    /// Whatever window of Search's comes onto a screen after — the scene's,
+    /// made late — goes at once.
+    @MainActor
+    private static func startUnseen(tries: Int = 0) {
+        let scene = SceneSlot.shared.browser.window
+        if scene == nil, tries < 20 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { startUnseen(tries: tries + 1) }
+            return
+        }
+        scene?.orderOut(nil)
+        keepingAway = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main
+        ) { note in
+            MainActor.assumeIsolated {
+                guard let window = note.object as? NSWindow, !(window is UnseenWindow), !(window is NSPanel),
+                      window.isVisible, NSScreen.screens.contains(where: { $0.frame.intersects(window.frame) })
+                else { return }
+                window.orderOut(nil)
+            }
+        }
+        if let url = Launch.startURL {
+            let first = Browser(record: WindowRecord(space: Space.firstID))
+            Browsers.open(first, frame: nil, quietly: true)
+            first.arrive(url)
+        }
+        NSApp.unhideWithoutActivation()
+    }
+
+    private static var keepingAway: NSObjectProtocol?
 
     @objc private func handle(getURL event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         // A test run takes nothing from outside it: an address from another
@@ -258,7 +295,8 @@ final class Links: NSObject, NSApplicationDelegate {
     @MainActor
     private static func comeForward() {
         // Never a test run's: a probe started hidden stays off every screen.
-        guard !Store.testing else { return }
+        // Nor a run Playwright started headless.
+        guard !Store.testing, !Launch.headless else { return }
         guard #available(macOS 14, *) else {
             NSApp.activate(ignoringOtherApps: true)
             return

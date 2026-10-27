@@ -15,6 +15,7 @@ import Foundation
 //   itself;
 // - nothing of a first launch shows: no welcome, no What's New, no update
 //   check, no session to bring back;
+// - headless, nothing shows at all (see headless);
 // - Browser.close, or the pipe closing, quits it at once.
 //
 // Anything else — a plain launch, or `--remote-debugging-port` alone — is an
@@ -47,7 +48,10 @@ enum Launch {
     /// free one, as Playwright asks when it reads the address back.
     static let port: Int? = active ? value("remote-debugging-port").flatMap(Int.init) : nil
 
-    /// Chromium's headless mode, which Search has no way to be.
+    /// Chromium's headless mode, which Search answers its own way: it runs
+    /// unseen — every window off every screen, no Dock icon, never in front
+    /// (Windows.open, Links.startForPlaywright). Chromium itself is never
+    /// headless, so pages render as they do on a screen.
     static let headless = active && arguments.contains { $0 == "--headless" || $0.hasPrefix("--headless=") }
 
     /// No window at the start: chromium.launch, whose pages all come in
@@ -79,13 +83,4 @@ enum Launch {
             return own.contains(name) || name.isEmpty ? nil : body
         }
     }()
-
-    /// Said on stderr, where Playwright collects what a browser says when
-    /// it fails to start, and then gone.
-    static func refuseHeadless() {
-        guard headless else { return }
-        let line = "Search runs headed only: launch it with headless: false.\n"
-        FileHandle.standardError.write(Data(line.utf8))
-        exit(1)
-    }
 }

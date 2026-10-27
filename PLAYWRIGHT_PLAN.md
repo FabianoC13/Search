@@ -3,7 +3,7 @@
 ## Goal
 In Chromium mode, Playwright treats Search exactly as it treats Chrome it launched itself: every page is a Search tab, and clicks, keys, the pointer, popups, dialogs, downloads, uploads, screenshots, video and viewports behave as they do in Chrome. Outside automation nothing changes.
 
-Done means two things. First, Tests/Playwright's specs pass against a running Search Beta and a launched one. Second, Playwright's own test suite fails on Search only where it also fails on Playwright's Chromium headed on the same Mac, plus a short written list of differences we accept.
+Done means two things. First, Tests/Playwright's specs pass against a running Search Beta and a launched one. Second, Playwright's own test suite fails on Search only where it also fails on Playwright's own full Chromium on the same Mac, plus a short written list of differences we accept.
 
 ## Where it stands
 Everything below is built. The bridge has been run end to end: Tests/Bridge builds it unchanged, puts it in front of a real headless Chromium, and runs the specs and a safety probe through it both ways in. All pass, except one skipped on purpose in attach mode. The rest of Search, its C layer and its Swift, is checked but hasn't been built yet: the first `./beta.sh` will tell. Playwright's own suite hasn't been run yet; it needs the Mac.
@@ -42,11 +42,11 @@ Everything below is built. The bridge has been run end to end: Tests/Bridge buil
 - `./playwright.sh switches` regenerates the reference list from the pinned release. It says what changed upstream, so the hand-chosen `attach` list can be checked again.
 
 ### Launch mode: Playwright starts Search
-- `chromium.launch({ executablePath: '/Applications/Search Beta.app/Contents/MacOS/Search', headless: false })`, `launchPersistentContext`, or `CRPATH`.
+- `chromium.launch({ executablePath: '/Applications/Search Beta.app/Contents/MacOS/Search' })`, with `headless: false` to watch it; `launchPersistentContext`; or `CRPATH`.
 - `--remote-debugging-pipe` (fd 3 and 4) or `--remote-debugging-port`. "DevTools listening on" is printed only once the bridge really listens. If the port is taken, Search says so on stderr and quits.
 - `--user-data-dir`: Search's whole world is in that folder, with the add-on read from the installed beta's. The engine is Chromium, with no welcome, no restore and no update check. `--no-startup-window` and a start URL are honored.
 - `Browser.close`, or the pipe closing, quits.
-- `--headless` is refused with one line on stderr: Search runs headed.
+- `--headless` runs Search unseen. Chromium is as ever, with the switches Playwright adds for headless (no scrollbars, no hover). Every window is off every screen, there's no Dock icon, and Search never comes forward. A permission prompt nobody can answer is refused, as headless Chrome refuses it.
 
 ### Contexts are private Search windows
 - `Target.createBrowserContext` makes a window of private, in-memory tabs that share one Chromium context. A hidden keeper page holds the context open and learns its id. `proxyServer` and `proxyBypassList` set the context's proxy.
@@ -69,14 +69,14 @@ Everything below is built. The bridge has been run end to end: Tests/Bridge buil
 | `./playwright.sh attach` | The specs against the Search Beta you have open, in Chromium mode, with tools allowed. |
 | `./playwright.sh launch` | The specs, Playwright starting Search Beta. |
 | `./playwright.sh baseline` | The specs against Playwright's own Chromium. |
-| `./playwright.sh suite` | Playwright 1.64.1's own tests against Search Beta, headed. Extra args go to `playwright test`. |
-| `./playwright.sh suite-baseline` | The same against Playwright's Chromium. |
+| `./playwright.sh suite` | Playwright 1.64.1's own tests against Search Beta, unseen. Extra args go to `playwright test`. |
+| `./playwright.sh suite-baseline` | The same against Playwright's own full Chromium, headless (`channel: 'chromium'`). |
 | `./playwright.sh expectations` | Writes `Tests/Playwright/expectations.txt`: what passes in the baseline and fails in Search. The aim is to bring it down to the differences below. |
 
 ## Differences we accept (unless CEF is patched)
 - Tabs opened by ⌘-click or middle-click have no opener. CEF routes them through `OnOpenURLFromTab`, which creates no window, so `page.on('popup')` doesn't fire for them. `context.on('page')` does.
 - Spaces with their own sign-ins are hidden from tools.
-- No headless mode.
+- Headless is Search unseen, full Chromium off every screen, not Chromium's headless mode. Its user agent doesn't say HeadlessChrome.
 - In Search's contexts, a grant for every origin at once (`grantPermissions` with no origin) answers prompts but isn't a site setting, so `navigator.permissions.query` still says "prompt" before the page asks.
 
 ## Moving the pin
