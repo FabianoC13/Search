@@ -1,65 +1,43 @@
-# Playwright for Search (on WebKit, without Chromium)
+# Playwright for Search
 
-## Goal
-`chromium.connectOverCDP('http://127.0.0.1:9222')` attaches to a running Search and drives its real tabs: navigate, click, type, fill, evaluate, wait for selectors, screenshot. Search stays on WebKit. This adds an opt-in debugging server that speaks the subset of the Chrome DevTools Protocol (CDP) Playwright needs, built on WKWebView's public API.
+## Where it stands
+Search has two engines, picked in Settings › Engine or with the Search menu's Switch to … item. Switching saves the session and relaunches into the other engine (CEF can be started only once per process), so the engine not in use loads nothing. Chromium is an optional download (`chromium.sh`, `ChromiumAddon.swift`).
 
-## Why CDP
-- Playwright attaches to an *open* browser only through `connectOverCDP`. Its WebKit mode launches its own patched WebKit and can't attach to an app.
-- Puppeteer, `@playwright/mcp`, browser-use and Stagehand speak CDP too, so they come along almost free. This also covers the roadmap item "Drive Search from an agent".
+- **Chromium mode**: native Playwright. This is the supported way to drive Search.
+- **WebKit mode**: no automation beyond read-only AppleScript. A CDP layer over WKWebView is a possible later step (see the end).
 
-## Architecture — `Sources/Search/Automation/`
-| File | Job |
+## Using it
+1. Settings › Engine › Chromium, and let tools drive Chromium (or launch with `--remote-debugging-port=9222`).
+2. ```js
+   const browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
+   const context = browser.contexts()[0];
+   const page = await context.newPage();   // a real Search tab
+   ```
+
+## The bridge (`Sources/Search/Chromium/DevToolsBridge.swift`)
+Chromium's own DevTools server listens on the port above the one asked for (9223 for 9222). Search listens on the one asked for and passes everything through, rewriting Chromium's port in `/json` answers and in messages, except:
+
+| Command | What Search does |
 |---|---|
-| `DebugServer.swift` | `NWListener` on 127.0.0.1 only. HTTP `/json/version`, `/json/list`, `/json/new`, `/json/close`; WebSocket at `/devtools/browser/<id>` and `/devtools/page/<id>`. |
-| `CDPSession.swift` | JSON-RPC routing, flat `sessionId` multiplexing, `-32601` for unknown methods, `{}` stubs for methods Playwright tolerates as no-ops. |
-| `Domains/*.swift` | One file per domain (Browser, Target, Page, Runtime, DOM, Input, Network, Fetch, Emulation), mapping onto `Tab` / `WKWebView`. |
-| `RemoteObjects.swift` + `Bridge.js` | Bridge script in a private `WKContentWorld`: CDP-style value serialization, `objectId` handle table, console/exception/binding events through `WKScriptMessageHandler`. |
+| `Target.createTarget` in the default context (`newPage`, `window.open` from a tool) | Opens a real tab in the window in front, then answers with the target that tab became: the first page Chromium reports after it was asked for. |
+| `Target.closeTarget` for such a tab | Closes it the way Search closes tabs. |
 
-## Coverage, mapped to WebKit
-| CDP | WebKit implementation | Fidelity |
-|---|---|---|
-| Browser.getVersion / close | Product `Search/<VERSION>` | full |
-| Target.* (discover, setAutoAttach+flatten, attach, create, close, activate, events) | Tab model (`ScriptTab.shown`), tab open/close/title/URL observers | full |
-| Target.createBrowserContext | Non-persistent `WKWebsiteDataStore` in its own window | good |
-| Page.navigate / reload / history / stopLoading | `load`, `reload`, `goBack/Forward`, `stopLoading` | full |
-| Page lifecycle (init, DOMContentLoaded, load, networkIdle) | `WKNavigationDelegate` + bridge events + in-flight counter | good (main frame) |
-| Page.getFrameTree / frame events | Bridge + `WKFrameInfo` | partial for cross-origin iframes |
-| addScriptToEvaluateOnNewDocument / createIsolatedWorld | `WKUserScript` at document start, `WKContentWorld.world(name:)` | full |
-| Page.captureScreenshot (clip, fullPage) / printToPDF | `takeSnapshot`, `createPDF` | good |
-| JavaScript dialogs | `WKUIDelegate` holds the completion until `handleJavaScriptDialog` | full |
-| Downloads | Existing download code | good |
-| Runtime.enable / evaluate / callFunctionOn / awaitPromise / getProperties / release | `callAsyncJavaScript(in:in:)` + handle table; one context per frame×world | full |
-| Console / exceptions | Bridge hooks `console.*`, `error`, `unhandledrejection` | good |
-| Runtime.addBinding (`exposeFunction`) | One message handler per binding | full |
-| DOM.describeNode / resolveNode / getContentQuads / getBoxModel / scrollIntoViewIfNeeded / setFileInputFiles | Bridge rects; file inputs via the open-panel delegate | good |
-| Input.dispatchMouseEvent / dispatchKeyEvent / insertText | Synthesized `NSEvent`s sent to the web view: trusted events, so hover, focus, IME and native controls act like a real user | good |
-| Emulation (viewport, UA, color scheme, geolocation, timezone, locale) | Resize view + `pageZoom`, `customUserAgent`, `appearance`, document-start overrides | partial to full |
-| Network events, extra headers, cookies | Navigation delegate for documents, bridge for fetch/XHR, `WKHTTPCookieStore` | partial (no headers for images/CSS) |
-| Fetch / `page.route` | Abort via content rule lists; fulfill/continue for fetch/XHR in the bridge; documents via `decidePolicyFor` | partial |
-| Tracing, Profiler, video, coverage, service-worker targets, full AX tree | Not offered; clean "not supported" error | — |
+Everything else (attaching, `Page`, `Runtime`, `Input`, `Network`, tracing, screenshots) is Chromium's own, so it behaves as with Chrome.
 
-## Turning it on (security)
-- Off by default. Turned on by launching with `--remote-debugging-port=9222`, or with Settings › Advanced › "Allow automation".
-- While it's on, a visible indicator shows (like Chrome's "controlled by automated test software").
-- Listens on 127.0.0.1 only. Rejects bad `Host`/`Origin` headers, so web pages and DNS rebinding can't reach it.
-- Private tabs are never listed or attachable, matching the existing AppleScript rule.
+With automation on, Chromium runs with `--disable-back-forward-cache`, as when Playwright starts Chrome itself.
 
-## Phases
-1. **Handshake**: server, `/json/*`, sessions, the minimum of Target/Browser/Page/Runtime, plus stubs. Done when `connectOverCDP` resolves and `contexts()[0].pages()` lists the open tabs.
-2. **Core actions**: `goto` + waits, evaluate/handles, quads, mouse/keyboard, screenshots, dialogs. Done when `goto`, `click`, `fill`, `press`, `waitFor`, `screenshot` and `expect().toHaveText` pass.
-3. **Pages and contexts**: `newPage`, `close`, popups from `window.open`, `newContext`, cookies, storage state.
-4. **Network and emulation**: events, `route`, headers, UA, viewport, color scheme, downloads, uploads, `exposeFunction`.
-5. **Turn on and protect**: launch flag, Settings toggle, indicator, Host/Origin checks, private-tab exclusion.
-6. **Compatibility suite**: `Tests/Playwright/`, a Node project pinned to one Playwright version that runs a curated set of Playwright-style tests against Search. Adds a pass/fail table to the README, plus Swift unit tests per domain.
-7. **Extras**: `do JavaScript` / `open location` in `Search.sdef`; docs for `@playwright/mcp --cdp-endpoint`.
+Only 127.0.0.1; requests whose `Host` isn't a loopback name are refused (DNS rebinding).
 
 ## Known limits
-- Cross-origin iframes: you can evaluate in them, but their lifecycle and frame tree are weaker than in Chromium.
-- Images, CSS and fonts can be seen after they load but can't be intercepted.
-- No tracing, video, coverage, CPU throttling, or service workers.
-- Playwright upgrades may start calling new CDP methods; the phase 6 suite catches that.
+- `browser.newContext()` still makes Chromium's own context and window, not a Search window. Next step: map it to a private (in-memory) Search window, `ChromiumProfile.ephemeral`.
+- A page that opens a popup while a tool's `newPage` is pending could be taken as the new tab's target. Unlikely in practice; the fix is to match on the tab's `chromium_page` once the C layer exposes its DevTools id.
+- If no Search window is open, `newPage` falls back to Chromium's own window.
 
-## Verification
-- `npx playwright test` in `Tests/Playwright` against a Search built with `./build.sh` and launched with `--remote-debugging-port=9222`.
-- `swift test` for the CDP layer.
-- Manual: `@playwright/mcp --cdp-endpoint http://127.0.0.1:9222` from Claude Code, driving a real tab.
+## Verification (on a Mac)
+- `./build.sh`, open the build with `--remote-debugging-port=9222`, switch to Chromium.
+- `curl -s 127.0.0.1:9222/json/version` shows `webSocketDebuggerUrl` on port 9222.
+- A script that runs `newPage` → `goto` → `click` → `screenshot` → `page.close()`: the tab appears in Search's sidebar and goes away on close.
+- `@playwright/mcp --cdp-endpoint http://127.0.0.1:9222` from Claude Code drives a real tab.
+
+## Later, optional: CDP over WebKit
+The earlier plan: a CDP subset on top of WKWebView (`Target`, `Page`, `Runtime`, `DOM`, `Input`, partial `Network`/`Fetch`, `Emulation`), so WebKit mode can be driven too. It's weaker than Chromium (cross-origin iframes, no tracing or video, no interception of images and CSS), so it's only worth doing if WebKit mode needs automation.

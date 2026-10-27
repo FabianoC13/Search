@@ -81,7 +81,9 @@ enum ChromiumRuntime {
         // since a build signed ad hoc is a stranger to the keychain each time.
         options.keychain_service = text("Search Chromium Safe Storage")
         options.keychain_account = text("Search Chromium")
-        options.port = Int32(port)
+        // Chromium's own server is one port up; the port asked for is the
+        // bridge's (DevToolsBridge), so a tool's new pages are Search's tabs.
+        options.port = Int32(port > 0 ? port + 1 : 0)
         options.mock_keychain = Store.testing ? 1 : 0
         guard chromium_start(&options, &error, error.count) == 1 else {
             Store.settings.removeObject(forKey: WebEngine.startingKey)
@@ -89,6 +91,7 @@ enum ChromiumRuntime {
             return .failed(String(cString: error))
         }
         running = true
+        if port > 0 { DevToolsBridge.shared.start(outer: port, inner: port + 1) }
         // A launch with no page to show still counts as started once it has
         // run a while without falling over.
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) { settle() }
@@ -120,12 +123,12 @@ enum ChromiumRuntime {
     }
 
     /// Only ports nothing system-wide needs, and only on 127.0.0.1, which
-    /// is all Chromium listens on.
+    /// is all Chromium listens on. Chromium takes the one above it.
     private static func requested() -> Int {
         let flag = "--remote-debugging-port="
         let asked = ProcessInfo.processInfo.arguments.last { $0.hasPrefix(flag) }
             .flatMap { Int($0.dropFirst(flag.count)) } ?? Store.settings.integer(forKey: portKey)
-        return (1024...65535).contains(asked) ? asked : 0
+        return (1024...65534).contains(asked) ? asked : 0
     }
 
     // MARK: - Profiles

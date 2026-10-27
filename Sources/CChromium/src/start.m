@@ -190,7 +190,7 @@ static void pump_stop(void) {
 
 // MARK: - The app and its browser process
 
-static int started, stopping, stopped, ready, mock_keychain;
+static int started, stopping, stopped, ready, mock_keychain, automated;
 static void (*on_ready)(void);
 
 int glue_running(void) {
@@ -215,6 +215,10 @@ static void CEF_CALLBACK before_command_line(cef_app_t *self, const cef_string_t
                                              cef_command_line_t *line) {
     // Only the browser process's: an empty type.
     if ((!type || type->length == 0) && mock_keychain) append_switch(line, "use-mock-keychain");
+    // With tools driving pages, Back and Forward load afresh, as when
+    // Playwright starts Chrome: a page kept whole in the cache would come
+    // back without the scripts and bindings a tool put in it.
+    if ((!type || type->length == 0) && automated) append_switch(line, "disable-back-forward-cache");
     GLUE_RELEASE(line);
 }
 
@@ -441,6 +445,7 @@ int chromium_start(const chromium_options *options, char *error, size_t size) {
     process.on_already_running_app_relaunch = relaunched;
     process.on_schedule_message_pump_work = schedule_work;
     mock_keychain = options->mock_keychain;
+    automated = options->port > 0;
     on_ready = options->ready;
     pump_start();
 
